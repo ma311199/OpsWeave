@@ -17,6 +17,9 @@
           <el-tag size="small" type="warning">{{ msg.tool }}</el-tag>
           <span>{{ msg.content }}</span>
         </div>
+        <div v-else-if="msg.type === 'clarify'" class="msg-bubble assistant-bubble clarify-bubble">
+          {{ msg.content }}
+        </div>
         <div v-else-if="msg.type === 'error'" class="msg-error">
           <el-alert :title="msg.content" type="error" :closable="false" />
         </div>
@@ -46,10 +49,6 @@
 import { ref, nextTick } from 'vue'
 import { Loading } from '@element-plus/icons-vue'
 
-const props = defineProps({
-  role: { type: String, default: 'admin' },
-})
-
 const messages = ref([])
 const input = ref('')
 const loading = ref(false)
@@ -69,7 +68,7 @@ function connectAndSend(query) {
   ws = new WebSocket(`${protocol}//${window.location.host}/api/chat/ws/chat`)
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({ role: props.role, query }))
+    ws.send(JSON.stringify({ query }))
   }
 
   ws.onmessage = (event) => {

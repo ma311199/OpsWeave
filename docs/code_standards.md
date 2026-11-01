@@ -103,8 +103,8 @@ if not self.is_ready:
 
 - 每个模块只负责单一职责
 - 模块间通过明确的接口交互，避免循环依赖
-- `retrieval/` 不依赖 `agents/`，`agents/` 可以依赖 `retrieval/`
-- 所有外部 API 调用必须经过 `PermissionChecker`
+- `retrieval/` 不依赖 `api/` 或 Agent 编排层，API/Agent 可调用检索模块
+- 需要授权的资源操作应在 API、Agent 或工具边界执行相应权限检查；公共服务连通性测试等不涉及用户资源授权的调用无需强行经过 `PermissionChecker`
 
 ## 9. 测试约定
 

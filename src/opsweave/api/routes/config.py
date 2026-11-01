@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import httpx
+import json
 from urllib.parse import urlparse
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field, field_validator
 
+from ..auth import require_admin
 from ...config.database import get_all_configs, update_configs, set_config, get_config
 from ...config.settings import get_settings
 
-router = APIRouter()
+
+
+router = APIRouter(dependencies=[Depends(require_admin)])
 
 # Mask API keys in responses (show only last 4 chars)
 def _mask_key(value: str) -> str:
@@ -36,22 +40,41 @@ class ConfigUpdate(BaseModel):
     embedding_api_key: str | None = None
     embedding_model: str | None = None
     embedding_dimension: int | None = None
+    embedding_max_tokens: int | None = Field(default=None, ge=1, le=1000000)
     milvus_uri: str | None = None
     milvus_user: str | None = None
     milvus_password: str | None = None
     milvus_database: str | None = None
     agent_max_iterations: int | None = None
+    mcp_servers: list[dict] | None = None
     # Milvus collections (JSON list)
     milvus_collections: list[dict] | None = None
+
+
+class MilvusField(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    data_type: str = Field(..., description="Milvus scalar or vector data type")
+    description: str = Field(default="", max_length=256)
+    is_primary: bool = False
+    auto_id: bool = False
+    max_length: int | None = Field(default=None, ge=1, le=65535)
+    dimension: int | None = Field(default=None, ge=1, le=32768)
+    index_type: str = "AUTOINDEX"
+    metric_type: str = "COSINE"
+    index_params: dict[str, int | float | str] = Field(default_factory=dict)
 
 
 class MilvusCollection(BaseModel):
     """A single Milvus collection configuration."""
     name: str = Field(..., description="Collection name")
-    dimension: int = Field(..., ge=1, le=4096, description="Vector dimension")
-    metric_type: str = Field(default="L2", description="Metric type: L2, IP, or COSINE")
-    index_type: str = Field(default="AUTOINDEX", description="Index type")
+    fields: list[MilvusField] = Field(..., min_length=2, max_length=64)
     description: str = Field(default="", description="Collection description")
+
+
+class MilvusCollectionDescription(BaseModel):
+    description: str = Field(default="", max_length=256)
+
+    model_config = {"extra": "ignore"}
 
 
 @router.get("/")
@@ -73,6 +96,7 @@ def get_configs() -> dict:
     result["embedding"]["api_key"] = _mask_key(db_configs.get("embedding_api_key", settings.embedding_api_key))
     result["embedding"]["model"] = db_configs.get("embedding_model", settings.embedding_model)
     result["embedding"]["dimension"] = int(db_configs.get("embedding_dimension", settings.embedding_dimension))
+    result["embedding"]["max_tokens"] = int(db_configs.get("embedding_max_tokens", 8192))
     
     # Milvus
     result["milvus"]["uri"] = db_configs.get("milvus_uri", settings.milvus_uri)
@@ -89,6 +113,13 @@ def get_configs() -> dict:
     
     # Agent
     result["agent"]["max_iterations"] = int(db_configs.get("agent_max_iterations", settings.agent_max_iterations))
+    try:
+        result["mcp_servers"] = json.loads(db_configs.get("mcp_servers", "[]"))
+    except (json.JSONDecodeError, TypeError):
+        result["mcp_servers"] = []
+    for server in result["mcp_servers"]:
+        if server.get("token"):
+            server["token"] = _mask_key(server["token"])
     
     return result
 
@@ -120,6 +151,8 @@ def update_configs_endpoint(req: ConfigUpdate) -> dict:
         updates["embedding_model"] = req.embedding_model
     if req.embedding_dimension is not None:
         updates["embedding_dimension"] = req.embedding_dimension
+    if req.embedding_max_tokens is not None:
+        updates["embedding_max_tokens"] = req.embedding_max_tokens
     
     # Milvus
     if req.milvus_uri is not None:
@@ -138,10 +171,57 @@ def update_configs_endpoint(req: ConfigUpdate) -> dict:
     # Agent
     if req.agent_max_iterations is not None:
         updates["agent_max_iterations"] = req.agent_max_iterations
+    if req.mcp_servers is not None:
+        current_servers = json.loads(get_config("mcp_servers") or "[]")
+        current_by_id = {server["id"]: server for server in current_servers}
+        servers = [McpServerConfig.model_validate(server).model_dump() for server in req.mcp_servers]
+        if len({server["id"] for server in servers}) != len(servers):
+            raise HTTPException(status_code=400, detail="MCP Server ID 不能重复")
+        for server in servers:
+            if server["token"].startswith("..."):
+                server["token"] = current_by_id.get(server["id"], {}).get("token", "")
+        updates["mcp_servers"] = json.dumps(servers, ensure_ascii=False)
     
     update_configs(updates)
+    get_settings.cache_clear()
     
     return {"status": "ok", "message": "配置已保存"}
+
+
+class McpServerConfig(BaseModel):
+    id: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    name: str = Field(..., min_length=1, max_length=128)
+    transport: str = Field(default="streamable-http", pattern=r"^streamable-http$")
+    url: str = Field(..., min_length=1, max_length=2048)
+    token: str = ""
+    enabled: bool = True
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        parsed = urlparse(value)
+        if parsed.scheme != "https" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            raise ValueError("MCP URL must use HTTPS unless connecting to localhost")
+        return value
+
+    model_config = {"extra": "forbid"}
+
+
+@router.post("/mcp/test")
+def test_mcp_server(req: McpServerConfig) -> dict:
+    from ...tools.mcp_client import test_server
+
+    server = req.model_dump()
+    if server["token"].startswith("..."):
+        current_servers = json.loads(get_config("mcp_servers") or "[]")
+        current = next((item for item in current_servers if item.get("id") == server["id"]), {})
+        server["token"] = current.get("token", "")
+
+    try:
+        tools = test_server(server)
+        return {"status": "ok", "message": f"连接成功，发现 {len(tools)} 个工具", "tools": tools}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)[:300]}
 
 
 @router.post("/test/{service}")
@@ -306,27 +386,90 @@ def create_milvus_collection(collection: MilvusCollection) -> dict:
         if utility.has_collection(collection.name):
             return {"status": "exists", "message": f"集合 '{collection.name}' 已存在"}
         
-        # Create collection
-        id_field = FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True)
-        vector_field = FieldSchema(
-            name="vector", dtype=DataType.FLOAT_VECTOR, dim=collection.dimension
-        )
-        text_field = FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=65535)
-        metadata_field = FieldSchema(name="metadata", dtype=DataType.JSON)
-        
+        # Build the requested schema from user-defined fields.
+        supported_types = {
+            "BOOL": DataType.BOOL,
+            "INT8": DataType.INT8,
+            "INT16": DataType.INT16,
+            "INT32": DataType.INT32,
+            "INT64": DataType.INT64,
+            "FLOAT": DataType.FLOAT,
+            "DOUBLE": DataType.DOUBLE,
+            "VARCHAR": DataType.VARCHAR,
+            "JSON": DataType.JSON,
+            "FLOAT_VECTOR": DataType.FLOAT_VECTOR,
+            "BINARY_VECTOR": DataType.BINARY_VECTOR,
+        }
+        names = [field.name for field in collection.fields]
+        if len(names) != len(set(names)):
+            raise ValueError("字段名称不能重复")
+        primary_fields = [field for field in collection.fields if field.is_primary]
+        vector_fields = [field for field in collection.fields if field.data_type in {"FLOAT_VECTOR", "BINARY_VECTOR"}]
+        if len(primary_fields) != 1 or len(vector_fields) < 1:
+            raise ValueError("必须且只能设置一个主键，并至少设置一个向量字段")
+        if primary_fields[0].auto_id and primary_fields[0].data_type != "INT64":
+            raise ValueError("自动生成主键仅支持 INT64")
+        if primary_fields[0].data_type not in {"INT64", "VARCHAR"}:
+            raise ValueError("Milvus 主键仅支持 INT64 或 VARCHAR")
+        fields = []
+        for field in collection.fields:
+            if field.data_type not in supported_types:
+                raise ValueError(f"不支持的数据类型: {field.data_type}")
+            kwargs = {"name": field.name, "dtype": supported_types[field.data_type], "description": field.description}
+            if field.data_type == "VARCHAR":
+                if field.max_length is None:
+                    raise ValueError(f"VARCHAR 字段 {field.name} 必须设置最大长度")
+                kwargs["max_length"] = field.max_length
+            if field.data_type in {"FLOAT_VECTOR", "BINARY_VECTOR"}:
+                if field.dimension is None:
+                    raise ValueError(f"向量字段 {field.name} 必须设置维度")
+                if field.data_type == "BINARY_VECTOR" and field.dimension % 8 != 0:
+                    raise ValueError(f"二进制向量字段 {field.name} 的维度必须是 8 的倍数")
+                kwargs["dim"] = field.dimension
+            if field.is_primary:
+                kwargs["is_primary"] = True
+                kwargs["auto_id"] = field.auto_id
+            fields.append(FieldSchema(**kwargs))
+
         schema = CollectionSchema(
-            fields=[id_field, vector_field, text_field, metadata_field],
-            description=collection.description or f"OpsWeave collection: {collection.name}",
+            fields=fields,
+            description=collection.description,
         )
         
         milvus_collection = Collection(name=collection.name, schema=schema)
+        if collection.description:
+            descriptions = get_config("milvus_collection_descriptions") or "{}"
+            try:
+                description_overrides = json.loads(descriptions)
+            except ValueError:
+                description_overrides = {}
+            description_overrides[collection.name] = collection.description
+            set_config("milvus_collection_descriptions", json.dumps(description_overrides, ensure_ascii=False), "milvus")
         
-        # Create index
-        milvus_collection.create_index(
-            field_name="vector",
-            index_type=collection.index_type,
-            metric_type=collection.metric_type,
-        )
+        # Create vector and scalar indexes using each field's configured type.
+        for field in collection.fields:
+            if field.data_type in {"FLOAT_VECTOR", "BINARY_VECTOR"}:
+                metric = field.metric_type
+                if field.data_type == "BINARY_VECTOR" and metric not in {"HAMMING", "JACCARD"}:
+                    raise ValueError("二进制向量仅支持 HAMMING 或 JACCARD 度量")
+                if field.data_type == "FLOAT_VECTOR" and metric not in {"L2", "IP", "COSINE"}:
+                    raise ValueError("浮点向量仅支持 L2、IP 或 COSINE 度量")
+                milvus_collection.create_index(
+                    field_name=field.name,
+                    index_params={
+                        "index_type": field.index_type,
+                        "metric_type": metric,
+                        "params": field.index_params,
+                    },
+                )
+            elif field.data_type not in {"BOOL", "JSON"}:
+                milvus_collection.create_index(
+                    field_name=field.name,
+                    index_params={
+                        "index_type": field.index_type,
+                        "params": field.index_params,
+                    },
+                )
         
         return {"status": "ok", "message": f"集合 '{collection.name}' 创建成功"}
     except Exception as e:
@@ -362,6 +505,14 @@ def delete_milvus_collection(name: str) -> dict:
             return {"status": "error", "message": f"集合 '{name}' 不存在"}
         
         utility.drop_collection(name)
+        descriptions = get_config("milvus_collection_descriptions") or "{}"
+        try:
+            description_overrides = json.loads(descriptions)
+        except ValueError:
+            description_overrides = {}
+        if name in description_overrides:
+            del description_overrides[name]
+            set_config("milvus_collection_descriptions", json.dumps(description_overrides, ensure_ascii=False), "milvus")
         return {"status": "ok", "message": f"集合 '{name}' 已删除"}
     except Exception as e:
         msg = str(e).lower()
@@ -397,31 +548,41 @@ def list_milvus_collections() -> dict:
         from pymilvus import utility, Collection
 
         _connect_milvus()
+        saved_descriptions = get_config("milvus_collection_descriptions") or "{}"
+        try:
+            description_overrides = json.loads(saved_descriptions)
+        except ValueError:
+            description_overrides = {}
 
         collections = utility.list_collections()
         result = []
         for name in collections:
-            info = {"name": name}
+            info = {"name": name, "description": description_overrides.get(name, "")}
             if utility.has_collection(name):
                 try:
                     col = Collection(name)
-                    info["row_count"] = col.num_entities
-                    info["description"] = col.description
+                    info["description"] = description_overrides.get(name) or col.description or ""
+                    try:
+                        info["row_count"] = col.num_entities
+                    except Exception:
+                        info["row_count"] = 0
                     info["fields"] = [
                         {
                             "name": f.name,
-                            "dtype": str(f.dtype),
+                            "dtype": getattr(f.dtype, "name", str(f.dtype)),
+                            "description": getattr(f, "description", "") or "",
                             "is_primary": f.is_primary,
                             "auto_id": f.auto_id,
+                            "params": getattr(f, "params", {}) or {},
                         }
-                        for f in col.fields
+                        for f in col.schema.fields
                     ]
                     try:
                         info["index"] = [
                             {
                                 "field": idx.field_name,
-                                "index_type": idx.index_type,
-                                "metric_type": idx.metric_type,
+                                "index_type": idx.params.get("index_type", idx.index_type),
+                                "metric_type": idx.params.get("metric_type", idx.params.get("metric", "")),
                             }
                             for idx in col.indexes
                         ]
@@ -429,7 +590,6 @@ def list_milvus_collections() -> dict:
                         info["index"] = []
                 except Exception:
                     info["row_count"] = 0
-                    info["description"] = ""
                     info["fields"] = []
                     info["index"] = []
             result.append(info)
@@ -446,40 +606,24 @@ def list_milvus_collections() -> dict:
 
 
 @router.put("/milvus/collections/{name}")
-def update_milvus_collection(name: str, collection: MilvusCollection) -> dict:
-    """Update a collection by deleting and recreating it (data will be lost)."""
+def update_milvus_collection(name: str, payload: MilvusCollectionDescription) -> dict:
+    """Update the collection description without changing its schema or data."""
     try:
-        from pymilvus import Collection, utility, FieldSchema, CollectionSchema, DataType
+        from pymilvus import utility
 
         _connect_milvus()
 
         if not utility.has_collection(name):
             return {"status": "error", "message": f"集合 '{name}' 不存在"}
 
-        # Drop old collection
-        utility.drop_collection(name)
-
-        # Recreate with new configuration
-        id_field = FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True)
-        vector_field = FieldSchema(
-            name="vector", dtype=DataType.FLOAT_VECTOR, dim=collection.dimension
-        )
-        text_field = FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=65535)
-        metadata_field = FieldSchema(name="metadata", dtype=DataType.JSON)
-
-        schema = CollectionSchema(
-            fields=[id_field, vector_field, text_field, metadata_field],
-            description=collection.description or f"OpsWeave collection: {collection.name}",
-        )
-
-        col = Collection(name=collection.name, schema=schema)
-        col.create_index(
-            field_name="vector",
-            index_type=collection.index_type,
-            metric_type=collection.metric_type,
-        )
-
-        return {"status": "ok", "message": f"集合 '{collection.name}' 已更新（数据已清空，请重新导入）"}
+        descriptions = get_config("milvus_collection_descriptions") or "{}"
+        try:
+            description_overrides = json.loads(descriptions)
+        except ValueError:
+            description_overrides = {}
+        description_overrides[name] = payload.description
+        set_config("milvus_collection_descriptions", json.dumps(description_overrides, ensure_ascii=False), "milvus")
+        return {"status": "ok", "message": f"集合 '{name}' 描述已更新"}
     except Exception as e:
         msg = str(e).lower()
         if "connection" in msg or "connect" in msg:

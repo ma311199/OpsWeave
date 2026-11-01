@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     # Agent
     agent_max_iterations: int = 8
 
+    # Role-based API tokens
+    admin_initial_password: str = ""
+    admin_token: str = ""
+    ops_engineer_token: str = ""
+    viewer_token: str = ""
+    mcp_token: str = ""
+
     # Paths
     data_dir: Path = Path("./data")
 
@@ -52,7 +59,7 @@ class Settings(BaseSettings):
 def _load_sqlite_overrides() -> dict[str, str]:
     """Load config overrides from SQLite."""
     try:
-        db_path = Path(os.getenv("DATA_DIR", "./data")) / "opsweave.db"
+        db_path = Path(os.getenv("DATA_DIR", str(Settings().data_dir))) / "opsweave.db"
         if not db_path.exists():
             return {}
         conn = sqlite3.connect(str(db_path))

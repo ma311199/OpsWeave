@@ -6,8 +6,6 @@ and similar OpenAI-compatible /embeddings endpoints.
 
 from __future__ import annotations
 
-from typing import List
-
 import httpx
 from llama_index.core.embeddings import BaseEmbedding
 from pydantic import Field
@@ -42,25 +40,32 @@ class OpenAICompatEmbedding(BaseEmbedding):
             dimension=s.embedding_dimension,
         )
 
-    def _get_query_embedding(self, query: str) -> List[float]:
+    def count_tokens(self, text: str) -> int:
+        """使用 LlamaIndex 当前 tokenizer 估算文本 token 数，供入库前做长度校验。"""
+        from llama_index.core.utils import get_tokenizer
+
+        return len(get_tokenizer()(text))
+
+    def _get_query_embedding(self, query: str) -> list[float]:
         return self._embed_batch([query])[0]
 
-    async def _aget_query_embedding(self, query: str) -> List[float]:
+    async def _aget_query_embedding(self, query: str) -> list[float]:
         return (await self._aembed_batch([query]))[0]
 
-    def _get_text_embedding(self, text: str) -> List[float]:
+    def _get_text_embedding(self, text: str) -> list[float]:
         return self._embed_batch([text])[0]
 
-    def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+    def _get_text_embeddings(self, texts: list[str]) -> list[list[float]]:
         return self._embed_batch(texts)
 
-    async def _aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+    async def _aget_text_embeddings(self, texts: list[str]) -> list[list[float]]:
         return await self._aembed_batch(texts)
 
-    async def _aget_text_embedding(self, text: str) -> List[float]:
+    async def _aget_text_embedding(self, text: str) -> list[float]:
         return (await self._aembed_batch([text]))[0]
 
-    def _embed_batch(self, texts: List[str]) -> List[List[float]]:
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        # 向兼容端点发送批量输入，并统一校验返回条数和向量维度。
         response = httpx.post(
             self.base_url,
             headers={
@@ -75,9 +80,11 @@ class OpenAICompatEmbedding(BaseEmbedding):
         )
         response.raise_for_status()
         data = response.json()
-        return [item["embedding"] for item in data["data"]]
+        embeddings = [item["embedding"] for item in data["data"]]
+        self._validate_embeddings(embeddings, len(texts))
+        return embeddings
 
-    async def _aembed_batch(self, texts: List[str]) -> List[List[float]]:
+    async def _aembed_batch(self, texts: list[str]) -> list[list[float]]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 self.base_url,
@@ -92,4 +99,12 @@ class OpenAICompatEmbedding(BaseEmbedding):
             )
             response.raise_for_status()
             data = response.json()
-        return [item["embedding"] for item in data["data"]]
+        embeddings = [item["embedding"] for item in data["data"]]
+        self._validate_embeddings(embeddings, len(texts))
+        return embeddings
+
+    def _validate_embeddings(self, embeddings: list[list[float]], expected_count: int) -> None:
+        if len(embeddings) != expected_count:
+            raise ValueError(f"Expected {expected_count} embeddings, received {len(embeddings)}")
+        if any(len(embedding) != self.dimension for embedding in embeddings):
+            raise ValueError(f"Embedding dimension does not match configured dimension {self.dimension}")

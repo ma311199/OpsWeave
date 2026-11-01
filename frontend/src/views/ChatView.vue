@@ -1,12 +1,11 @@
 <template>
   <div class="chat-view">
-    <ChatPanel :role="currentRole" />
+    <ChatPanel />
   </div>
 </template>
 
 <script setup>
 import ChatPanel from '../components/ChatPanel.vue'
-import { currentRole } from '../store/role'
 </script>
 
 <style scoped>

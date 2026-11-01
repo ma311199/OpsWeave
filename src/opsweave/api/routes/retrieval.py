@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from ..auth import current_user, require_admin
 from ...auth.permissions import PermissionChecker, ResourceType, Role
 from ...retrieval.retriever import Retriever
 
@@ -15,7 +16,6 @@ _checker = PermissionChecker.default_rules()
 class RetrieveRequest(BaseModel):
     query: str = Field(..., description="Natural language query")
     top_k: int = Field(default=5, ge=1, le=20, description="Number of results")
-    role: str = Field(default="admin", description="User role for permission check")
 
 
 class RetrieveResponse(BaseModel):
@@ -24,18 +24,14 @@ class RetrieveResponse(BaseModel):
 
 
 @router.post("/search", response_model=RetrieveResponse)
-def search(req: RetrieveRequest) -> RetrieveResponse:
+def search(req: RetrieveRequest, principal: tuple[str, Role] = Depends(current_user)) -> RetrieveResponse:
     """Search the knowledge base via Milvus vector retrieval."""
-    try:
-        role = Role(req.role)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid role: {req.role}")
-
+    username, role = principal
     _checker.require(role, ResourceType.RETRIEVAL_INDEX)
 
     retriever = Retriever()
     try:
-        results = retriever.retrieve(query=req.query, top_k=req.top_k, role=role)
+        results = retriever.retrieve(query=req.query, top_k=req.top_k, role=role, user_id=username)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
@@ -54,6 +50,7 @@ def search(req: RetrieveRequest) -> RetrieveResponse:
 
 @router.post("/build")
 def build_index(
+    role: Role = Depends(require_admin),
     documents_path: str | None = None,
     collection_name: str = "opsweave",
 ) -> dict:

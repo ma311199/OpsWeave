@@ -6,23 +6,13 @@ echo    OpsWeave 停止脚本
 echo ============================================
 echo.
 
-REM 查找并结束占用 8000 端口的进程（后端）
+REM 精确匹配本地监听端口，避免误匹配 18000 等端口
 echo 正在停止后端服务...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8000 ^| findstr LISTENING') do (
-    echo 结束进程 PID: %%a
-    taskkill /F /PID %%a >nul 2>&1
-)
+call :stop_port 8001
 
-REM 查找并结束占用 5173 或 5174 端口的进程（前端）
 echo 正在停止前端服务...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr :5173 ^| findstr LISTENING') do (
-    echo 结束进程 PID: %%a
-    taskkill /F /PID %%a >nul 2>&1
-)
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr :5174 ^| findstr LISTENING') do (
-    echo 结束进程 PID: %%a
-    taskkill /F /PID %%a >nul 2>&1
-)
+call :stop_port 5173
+call :stop_port 5174
 
 echo.
 echo ============================================
@@ -30,3 +20,14 @@ echo    已停止所有服务
 echo ============================================
 echo.
 pause
+exit /b
+
+:stop_port
+set "PORT=%~1"
+for /f "tokens=1,2,3,4,5" %%a in ('netstat -ano -p tcp ^| findstr /R /C:":%PORT% .*LISTENING"') do (
+    if "%%b"=="LISTENING" if "%%c"=="%PORT%" (
+        echo 结束本地端口 %PORT% 对应进程 PID: %%e
+        taskkill /PID %%e >nul 2>&1
+    )
+)
+exit /b

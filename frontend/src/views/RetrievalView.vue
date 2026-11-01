@@ -1,12 +1,11 @@
 <template>
   <div class="retrieval-view">
-    <RetrievalPanel :role="currentRole" />
+    <RetrievalPanel />
   </div>
 </template>
 
 <script setup>
 import RetrievalPanel from '../components/RetrievalPanel.vue'
-import { currentRole } from '../store/role'
 </script>
 
 <style scoped>

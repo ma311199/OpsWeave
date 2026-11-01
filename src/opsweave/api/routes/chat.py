@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ...auth.permissions import PermissionChecker, ResourceType, Role
+from ...auth.permissions import Role
+from ..agents import run_agent
+from ..auth import websocket_role
+from ..user_store import user_for_token
 
 router = APIRouter()
-_checker = PermissionChecker.default_rules()
 
 
 @router.websocket("/ws/chat")
@@ -19,75 +22,45 @@ async def chat_ws(websocket: WebSocket) -> None:
     Protocol (JSON messages):
     Client → Server: {"role": "admin", "query": "问题内容"}
     Server → Client: {"type": "thinking", "content": "..."}
-                     {"type": "tool", "tool": "retrieve", "content": "..."}
-                     {"type": "answer", "content": "..."}
+                     {"type": "tool", "tool": "knowledge_search", "content": "..."}
+                     {"type": "clarify", "content": "..."} 或 {"type": "answer", "content": "..."}
                      {"type": "done"}
     """
+    try:
+        role = await websocket_role(websocket)
+    except Exception:
+        await websocket.close(code=4401)
+        return
+    if not isinstance(role, Role):
+        await websocket.close(code=4401)
+        return
+
     await websocket.accept()
 
     try:
-        # Receive initial message with role and query
         data = await websocket.receive_text()
         msg = json.loads(data)
-        role_str = msg.get("role", "admin")
         query = msg.get("query", "")
 
-        try:
-            role = Role(role_str)
-        except ValueError:
-            await websocket.send_json({"type": "error", "content": f"Invalid role: {role_str}"})
-            await websocket.close()
-            return
 
-        # Send thinking status
         await websocket.send_json({"type": "thinking", "content": "正在分析问题..."})
-
-        # For now, delegate to LLM directly.
-        # In production, this will be replaced by LangGraph agent.
-        from ...llm.client import get_llm
-
-        llm = get_llm()
-
-        # Simple flow: LLM decides if retrieval needed
-        decision_prompt = (
-            f"你是一个运维助手。用户问题：{query}\n\n"
-            f"请判断是否需要检索知识库。"
-            f"如果问题涉及具体运维操作、故障排查、系统配置等，返回 JSON："
-            f'{{"need_retrieval": true}}\n'
-            f'如果是简单问候或常识问题，返回 JSON：{{"need_retrieval": false}}\n'
-            f"只返回 JSON，不要其他内容。"
-        )
-
-        decision_msg = await llm.ainvoke(decision_prompt)
-        decision_text = decision_msg.content.strip()
-
-        try:
-            decision = json.loads(decision_text)
-        except json.JSONDecodeError:
-            decision = {"need_retrieval": False}
-
-        if decision.get("need_retrieval", False):
-            _checker.require(role, ResourceType.RETRIEVAL_INDEX)
-            await websocket.send_json({"type": "tool", "tool": "retrieve", "content": "正在检索知识库..."})
-
-            from ...retrieval.retriever import Retriever
-
-            retriever = Retriever()
-            if retriever.is_ready:
-                results = retriever.retrieve(query=query, role=role)
-                context = "\n\n".join(r.text for r in results)
-            else:
-                context = ""
-
-            final_prompt = (
-                f"基于以下知识库信息回答用户问题：\n\n{context}\n\n"
-                f"用户问题：{query}\n\n请提供准确、专业的回答。"
-            )
-            response = await llm.ainvoke(final_prompt)
+        token = websocket.cookies.get("opsweave_session")
+        session_user = user_for_token(token)
+        if not session_user:
+            await websocket.close(code=4401)
+            return
+        state = await asyncio.to_thread(run_agent, query, role, session_user[0])
+        for call in state.get("tool_calls", []):
+            await websocket.send_json({
+                "type": "tool",
+                "server_id": call["server_id"],
+                "tool": call["name"],
+                "content": "工具调用完成",
+            })
+        if state.get("route") == "clarify":
+            await websocket.send_json({"type": "clarify", "content": state["answer"]})
         else:
-            response = await llm.ainvoke(f"你是运维助手，请回答：{query}")
-
-        await websocket.send_json({"type": "answer", "content": response.content})
+            await websocket.send_json({"type": "answer", "content": state["answer"]})
         await websocket.send_json({"type": "done"})
 
     except WebSocketDisconnect:

@@ -1,16 +1,27 @@
 import { createApp } from 'vue'
-import ElementPlus from 'element-plus'
+import axios from 'axios'
+import {
+  ElAlert, ElButton, ElCard, ElCheckbox, ElDialog, ElDivider, ElEmpty, ElForm,
+  ElFormItem, ElIcon, ElInput, ElInputNumber, ElOption, ElSelect, ElSlider,
+  ElTable, ElTableColumn, ElTabs, ElTabPane, ElTag, ElUpload,
+} from 'element-plus'
 import 'element-plus/dist/index.css'
-import * as ElementPlusIconsVue from '@element-plus/icons-vue'
+import { Loading } from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
 
+axios.defaults.withCredentials = true
+
 const app = createApp(App)
 
-for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
-  app.component(key, component)
-}
+app.component('Loading', Loading)
 
-app.use(ElementPlus)
+for (const component of [
+  ElAlert, ElButton, ElCard, ElCheckbox, ElDialog, ElDivider, ElEmpty, ElForm,
+  ElFormItem, ElIcon, ElInput, ElInputNumber, ElOption, ElSelect, ElSlider,
+  ElTable, ElTableColumn, ElTabs, ElTabPane, ElTag, ElUpload,
+]) {
+  app.component(component.name, component)
+}
 app.use(router)
 app.mount('#app')

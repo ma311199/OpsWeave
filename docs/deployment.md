@@ -1,205 +1,94 @@
-# OpsWeave 部署文档
+# OpsWeave 部署与运行
 
-## 1. 前置条件
+## 1. 运行依赖
 
-| 组件 | 版本要求 | 说明 |
+| 组件 | 要求 | 用途 |
 |---|---|---|
-| Python | >= 3.11 | 推荐 3.12 |
-| Milvus | >= 2.4 | 向量数据库 |
-| Embedding API | OpenAI 兼容 | 如 DashScope qwen3-vl-embedding |
-| LLM API | OpenAI 兼容 | 如 Spark X2.6 |
+| Python | >= 3.11 | FastAPI 后端与 Agent |
+| uv | 当前项目依赖管理工具 | 安装及运行 Python 项目 |
+| Node.js / npm | 与 Vite 6 兼容 | 安装、构建和运行 Vue 前端 |
+| Milvus | 可访问的 Milvus 服务 | 向量检索与知识库 collection |
+| LLM API | OpenAI 兼容接口 | Agent 分类、回答及摘要策略 |
+| Embedding API | OpenAI 兼容接口 | 文本向量生成 |
 
 ## 2. 安装
 
-### 2.1 克隆仓库
-
-```bash
-git clone https://github.com/your-org/OpsWeave.git
-cd OpsWeave
-```
-
-### 2.2 安装 Python
-
-```bash
-uv python install 3.12
-```
-
-### 2.3 安装项目依赖
-
-```bash
+```powershell
 uv sync
+Set-Location frontend
+npm install
 ```
 
-### 2.4 配置环境变量
+在项目根目录配置 `.env` 或部署环境变量。配置字段及默认值以 `src/opsweave/config/settings.py` 为准，主要包含：
 
-```bash
-cp .env.example .env
+- `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、`LLM_TEMPERATURE`
+- `EMBEDDING_BASE_URL`、`EMBEDDING_API_KEY`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSION`
+- `embedding_max_tokens` 在管理员配置页设置（默认 8192）；该值须按实际 embedding 模型文档手动填写
+- `MILVUS_URI`、`MILVUS_USER`、`MILVUS_PASSWORD`、`MILVUS_DATABASE`
+- `DATA_DIR`、`ADMIN_INITIAL_PASSWORD`、角色 token 与 `MCP_TOKEN`
+
+部分应用设置可在管理员配置页面修改并保存到 `DATA_DIR/opsweave.db`。密钥不得提交到版本库；请为生产环境使用独立凭据。
+
+## 3. 本地启动
+
+Windows 在项目根目录执行：
+
+```powershell
+.\start.bat
 ```
 
-编辑 `.env` 文件填写实际配置：
+脚本启动后端于 `127.0.0.1:8001`，健康检查成功后启动前端 Vite，默认地址为 `127.0.0.1:5173`；若 5173 被非 Vite 程序占用则使用 5174。停止脚本：
 
-```env
-# LLM
-LLM_BASE_URL=https://maas-api.cn-huabei-1.xf-yun.com/v2
-LLM_API_KEY=your-api-key
-LLM_MODEL=spark-x2.6
-LLM_TEMPERATURE=0.7
-
-# Milvus
-MILVUS_URI=http://your-milvus-host:19530
-MILVUS_USER=mm
-MILVUS_PASSWORD=your-password
-MILVUS_DATABASE=opsweave
-
-# Embedding
-EMBEDDING_BASE_URL=https://your-embedding-api/v1
-EMBEDDING_API_KEY=your-embedding-key
-EMBEDDING_MODEL=qwen3-vl-embedding
-EMBEDDING_DIMENSION=2048
-
-# Agent
-AGENT_MAX_ITERATIONS=8
-
-# Data
-DATA_DIR=./data
+```powershell
+.\stop.bat
 ```
 
-## 3. 构建知识库索引
+手动启动后端：
 
-### 3.1 准备文档
-
-将运维相关文档放入 `./data/docs/` 目录，支持的格式：
-
-- `.txt` / `.md` — 纯文本
-- `.pdf` — PDF 文档
-- `.docx` — Word 文档
-- `.html` — 网页快照
-
-### 3.2 创建索引
-
-```bash
-uv run python -c "
-from opsweave.retrieval.retriever import Retriever
-retriever = Retriever()
-retriever.build_index(
-    documents_path='./data/docs',
-    collection_name='opsweave',
-)
-print('Index built successfully')
-"
+```powershell
+uv run python -m uvicorn opsweave.api.main:app --host 127.0.0.1 --port 8001
 ```
 
-### 3.3 验证索引
+手动启动前端：
 
-```bash
-uv run python -c "
-from opsweave.retrieval.retriever import Retriever
-retriever = Retriever()
-retriever.build_index(collection_name='opsweave')
-results = retriever.retrieve('数据库连接超时排查')
-print(f'Retrieved {len(results)} results')
-"
+```powershell
+Set-Location frontend
+npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-## 4. 运行
+健康检查端点：`GET /api/health/ping`。FastAPI OpenAPI 文档通常可在后端 `/docs` 查看。
 
-### 4.1 开发模式
+## 4. 生产构建
 
-```bash
-uv run main.py
+构建前端静态资源：
+
+```powershell
+Set-Location frontend
+npm run build
 ```
 
-Gradio 服务默认运行在 `http://localhost:7860`。
+生产运行应由适合部署环境的进程管理器分别托管 ASGI 后端和前端静态资源/反向代理。当前仓库提供本地 Windows 启动脚本；没有提供已验证的 Dockerfile 或生产编排配置，不要直接依赖开发服务器作为公网生产服务。
 
-### 4.2 生产部署
+生产环境建议：
 
-#### 方式一：Docker
+- 将 Uvicorn 绑定到受控网络接口，并由反向代理提供 HTTPS。
+- 把 CORS `allow_origins` 从当前开发配置的通配符改为可信前端来源。
+- 设置强认证凭据及 `MCP_TOKEN`，限制管理员与 MCP 服务访问。
+- 将 `DATA_DIR` 指向持久化目录并做好 SQLite 备份；Milvus 按其自身策略备份。
+- 确保后端能够访问 Milvus、LLM 与 Embedding 服务。
 
-创建 `Dockerfile`：
+## 5. 知识库索引
 
-```dockerfile
-FROM python:3.12-slim
+通过前端上传和申请审批流程向 collection 写入文档。管理员也可通过受保护接口 `POST /api/retrieval/build` 连接或构建索引；参数包括可选 `documents_path` 和 `collection_name`。collection 的创建、字段及索引管理由管理员配置页面/API执行，collection schema 必须满足当前检索实现要求。
 
-WORKDIR /app
-COPY . .
-RUN pip install uv && uv sync --frozen
+知识库文档文件和元数据位于 `DATA_DIR` 下；向量数据保存在 Milvus。删除或迁移数据前应同时考虑两处存储。
 
-EXPOSE 7860
-CMD ["uv", "run", "main.py"]
-```
+## 6. 故障排查
 
-构建并运行：
-
-```bash
-docker build -t opsweave .
-docker run -d -p 7860:7860 \
-  -e LLM_API_KEY=xxx \
-  -e MILVUS_URI=http://host.docker.internal:19530 \
-  opsweave
-```
-
-#### 方式二：直接运行
-
-```bash
-uv sync
-uv run main.py --host 0.0.0.0 --port 7860
-```
-
-## 5. 生产环境注意事项
-
-### 5.1 安全
-
-- `.env` 文件不要入库，使用 CI/CD 注入环境变量
-- 限制 API Key 的访问范围
-- Milvus 启用 TLS 加密
-- 使用反向代理（Nginx）保护 Gradio 端口
-
-### 5.2 性能
-
-- `retriever_top_k` 根据实际需求调整（3-10 之间）
-- `retriever_chunk_size` 影响检索精度，建议 256-1024
-- Milvus 集群部署时启用分段索引加速检索
-
-### 5.3 监控
-
-- 记录 Agent 决策路径（使用 LangGraph 的 callback）
-- 监控 Embedding API 调用延迟和错误率
-- 监控 Milvus 连接状态和查询延迟
-- 设置 API Key 使用量告警
-
-## 6. 常见问题
-
-### Milvus 连接失败
-
-```
-Connection refused → 检查 MILVUS_URI 是否可达
-Authentication failed → 检查 MILVUS_USER / MILVUS_PASSWORD
-Collection not found → 先运行 build_index() 创建
-```
-
-### Embedding API 报错
-
-```
-401 Unauthorized → 检查 EMBEDDING_API_KEY
-404 Not Found → 检查 EMBEDDING_BASE_URL 是否正确
-Dimension mismatch → 检查 EMBEDDING_DIMENSION 与模型实际维度一致
-```
-
-### 检索结果质量差
-
-- 增大 `retriever_top_k`
-- 调整 `retriever_chunk_size`（更小的块提高精度）
-- 检查文档质量（确保分块后的文本有完整语义）
-
-## 7. 升级
-
-```bash
-git pull
-uv sync
-uv run python -c "
-from opsweave.retrieval.retriever import Retriever
-retriever = Retriever()
-retriever.build_index(collection_name='opsweave')
-"
-uv run main.py
-```
+- **后端未启动**：确认 `uv sync` 已完成，并检查后端窗口的配置或依赖错误。
+- **前端未启动**：确认已在 `frontend` 目录运行 `npm install`，且端口 5173/5174 可用。
+- **Milvus 连接失败**：检查 URI、凭据、数据库名称及网络连通性。
+- **Embedding 请求失败**：检查 API 地址、密钥、模型名称和向量维度。
+- **LLM 请求失败**：检查兼容 API 地址、密钥和模型名称。
+- **用户无法访问资源**：确认 session cookie 有效；访问管理员配置和索引构建需要管理员角色。
+- **索引申请失败**：在知识库文档状态中检查 `error` 信息，并确认 collection 存在且字段与向量维度匹配。

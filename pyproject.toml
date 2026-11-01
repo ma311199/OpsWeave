@@ -9,6 +9,7 @@ dependencies = [
     "langgraph>=0.2.60",
     "langchain-core>=0.3.29",
     "langchain-openai>=0.2.14",
+    "fastmcp>=2.0.0",
     "llama-index-core>=0.12.0",
     "llama-index-llms-langchain>=0.4.0",
     "llama-index-embeddings-langchain>=0.3.0",
@@ -28,8 +29,8 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/opsweave"]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "ruff>=0.7.0",
     "pytest>=8.0.0",
 ]

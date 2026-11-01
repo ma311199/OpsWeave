@@ -1,3 +1,5 @@
-import { ref } from 'vue'
+export const currentRole = { value: 'viewer' }
 
-export const currentRole = ref('admin')
+export function getRoleToken() {
+  return ''
+}

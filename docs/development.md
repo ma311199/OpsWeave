@@ -2,188 +2,92 @@
 
 ## 1. 环境准备
 
-### 安装 Python
+需要 Python 3.11 或更高版本、`uv`，前端开发还需要 Node.js 与 npm。项目依赖由 `pyproject.toml` 和 `frontend/package.json` 管理。
 
-需要 Python 3.11 或更高版本。使用 `uv` 管理 Python 版本：
-
-```bash
-uv python install 3.12
-```
-
-### 安装项目依赖
-
-```bash
-cd OpsWeave
+```powershell
 uv sync
+Set-Location frontend
+npm install
 ```
 
-### 配置环境变量
-
-复制 `.env.example` 为 `.env` 并填写实际配置：
-
-```bash
-cp .env.example .env
-```
-
-必须配置的项：
-
-| 配置项 | 说明 |
-|---|---|
-| `LLM_BASE_URL` | LLM API 地址（OpenAI 兼容） |
-| `LLM_API_KEY` | LLM API Key |
-| `LLM_MODEL` | 模型名称 |
-| `MILVUS_URI` | Milvus 服务地址 |
-| `MILVUS_USER` | Milvus 用户名 |
-| `MILVUS_PASSWORD` | Milvus 密码 |
-| `EMBEDDING_BASE_URL` | Embedding API 地址 |
-| `EMBEDDING_API_KEY` | Embedding API Key |
-| `EMBEDDING_MODEL` | Embedding 模型名称 |
+后端配置通过环境变量、根目录 `.env` 及部分 SQLite 配置覆盖项加载。首次启动前可配置 LLM、Embedding 和 Milvus 参数；敏感密钥不要提交到版本库。管理员初始密码及角色 token 等认证项请参照 `src/opsweave/config/settings.py`。
 
 ## 2. 项目结构
 
-```
+```text
 OpsWeave/
-├── .env                  # 环境变量（不入库）
-├── .env.example          # 环境变量模板
-├── .python-version       # Python 版本
-├── pyproject.toml        # 项目配置与依赖
-├── main.py               # 入口文件
-├── src/opsweave/         # 源代码
-│   ├── __init__.py
-│   ├── auth/             # 权限隔离
-│   ├── config/           # 配置管理
-│   ├── llm/              # LLM 客户端
-│   ├── retrieval/        # 检索引擎
-│   ├── tools/            # 外部工具
-│   ├── agents/           # Agent 决策循环
-│   └── ui/               # Gradio 界面
-├── docs/                 # 技术文档
-│   ├── architecture.md
-│   ├── code_standards.md
-│   ├── development.md
-│   ├── api.md
-│   └── deployment.md
-└── tests/                # 测试代码（待创建）
+├── src/opsweave/
+│   ├── api/                 # FastAPI、认证、Agent 与 API routes
+│   ├── auth/                # 权限模型
+│   ├── config/              # Settings、SQLite 配置
+│   ├── llm/                 # LLM 客户端
+│   ├── retrieval/           # Embedding、Milvus、Retriever
+│   └── tools/               # MCP 客户端与服务端
+├── frontend/                # Vue 3 + Vite 前端
+├── tests/                   # API 测试
+├── docs/                    # 项目文档
+├── start.bat                # Windows 本地启动脚本
+└── stop.bat                 # Windows 本地停止脚本
 ```
 
-## 3. 本地开发
+## 3. 本地启动
 
-### 启动开发服务器
+Windows 可在项目根目录运行：
 
-```bash
-uv run main.py
+```powershell
+.\start.bat
 ```
 
-### 运行代码检查
+脚本检查 `uv` 和前端依赖后启动后端 `127.0.0.1:8001`，等待健康检查通过再启动 Vite（默认 `127.0.0.1:5173`；端口占用时使用 5174）。停止服务可运行：
 
-```bash
+```powershell
+.\stop.bat
+```
+
+也可分开启动：
+
+```powershell
+uv run python -m uvicorn opsweave.api.main:app --host 127.0.0.1 --port 8001
+```
+
+另开终端运行前端：
+
+```powershell
+Set-Location frontend
+npm run dev -- --host 127.0.0.1 --port 5173
+```
+
+后端健康检查为 `http://127.0.0.1:8001/api/health/ping`。API 路由和 WebSocket 协议见 `docs/api.md`。
+
+## 4. 代码检查与测试
+
+```powershell
 uv run ruff format --check .
 uv run ruff check .
-```
-
-### 自动修复代码风格
-
-```bash
-uv run ruff format .
-uv run ruff check --fix .
-```
-
-## 4. 构建与打包
-
-```bash
-uv build
-```
-
-生成的包在 `dist/` 目录下。
-
-## 5. 测试
-
-### 编写测试
-
-在 `tests/` 目录下创建测试文件，使用 `pytest`：
-
-```python
-import pytest
-from opsweave.retrieval.retriever import Retriever
-
-def test_retriever_initialization():
-    retriever = Retriever()
-    assert retriever.is_ready is False
-```
-
-### 运行测试
-
-```bash
 uv run pytest tests/ -v
 ```
 
-## 6. 文档编写
+前端生产构建：
 
-- 架构设计：`docs/architecture.md`
-- 代码规范：`docs/code_standards.md`
-- API 文档：`docs/api.md`
-- 开发指南：`docs/development.md`（本文件）
-- 部署文档：`docs/deployment.md`
-
-## 7. 常见开发任务
-
-### 新增检索工具
-
-1. 在 `retrieval/` 下创建新文件
-2. 实现检索逻辑，返回 `RetrievalResult` 列表
-3. 在 `__init__.py` 中导出
-4. 更新 `docs/api.md`
-
-### 新增外部工具
-
-1. 在 `tools/` 下创建新文件
-2. 实现工具调用逻辑
-3. 在 `PermissionChecker` 中添加权限规则
-4. 更新 `docs/architecture.md`
-
-### 修改 Agent 决策逻辑
-
-1. 在 `agents/` 下修改状态图
-2. 调整节点间的数据流
-3. 更新 `docs/architecture.md`
-
-## 8. 调试技巧
-
-### 查看日志
-
-在 `main.py` 中配置日志级别：
-
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
+```powershell
+Set-Location frontend
+npm run build
 ```
 
-### 连接 Milvus 调试
+测试使用 pytest 与 FastAPI TestClient；外部依赖按测试需要 mock。当前测试覆盖知识库 API 和检索 API，修改认证、权限、索引或文档状态流程时应同步补充测试。
 
-```bash
-uv run python -c "
-from opsweave.retrieval.vector_store import get_milvus_store
-store = get_milvus_store()
-print('Milvus connected:', store)
-"
-```
+## 5. 开发约定
 
-### 测试 Embedding API
+- 新增 API 时放入 `src/opsweave/api/routes/`，并在 `api/main.py` 注册路由。
+- 访问受保护资源时复用 `api/auth.py` 和 `auth/permissions.py` 的认证/授权机制。
+- 用户文档与 chunk 元数据保存在 SQLite，向量写入 Milvus；需保持所有者过滤和 collection 关联行为。
+- 配置项应同步维护 `config/settings.py`、配置 API 与相关前端表单。
+- 修改接口行为时更新 `docs/api.md`；修改模块边界或数据流时更新 `docs/architecture.md`。
 
-```bash
-uv run python -c "
-from opsweave.retrieval.embeddings import OpenAICompatEmbedding
-e = OpenAICompatEmbedding.from_settings()
-vector = e.get_query_embedding('test query')
-print('Vector dimension:', len(vector))
-"
-```
+## 6. 当前主要功能
 
-## 9. 版本管理
-
-- 使用 `pyproject.toml` 中的 `version` 字段管理版本
-- 遵循语义化版本（Semantic Versioning）：
-  - `MAJOR.MINOR.PATCH`
-  - `MAJOR`：不兼容的 API 变更
-  - `MINOR`：向后兼容的功能新增
-  - `PATCH`：向后兼容的问题修复
+- 账号注册、登录、登出及管理员用户列表。
+- 基于 LangGraph 的聊天路由：直接回答、内部检索或 MCP 知识库搜索。
+- Milvus 检索与管理员索引构建。
+- 文档上传、切分策略选择、管理员审批、索引处理、chunk 查看和删除。
+- 管理员 LLM、Embedding、Milvus、Agent 配置及服务连通性测试。

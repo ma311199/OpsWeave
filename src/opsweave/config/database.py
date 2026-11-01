@@ -29,14 +29,16 @@ CONFIG_MAP: dict[str, tuple[str, str]] = {
     "embedding_api_key":   ("embedding_api_key",   "embedding"),
     "embedding_model":     ("embedding_model",     "embedding"),
     "embedding_dimension": ("embedding_dimension", "embedding"),
+    "embedding_max_tokens": ("embedding_max_tokens", "embedding"),
     # Milvus
     "milvus_uri":          ("milvus_uri",          "milvus"),
     "milvus_user":         ("milvus_user",         "milvus"),
     "milvus_password":     ("milvus_password",     "milvus"),
     "milvus_database":     ("milvus_database",     "milvus"),
     "milvus_collections":  ("milvus_collections",  "milvus"),
-    # Agent
+    # Agent and MCP
     "agent_max_iterations": ("agent_max_iterations", "agent"),
+    "mcp_servers": ("mcp_servers", "mcp"),
 }
 
 
@@ -102,4 +104,5 @@ def update_configs(configs: dict[str, Any]) -> dict[str, str]:
             continue
         db_key, cat = CONFIG_MAP[key]
         set_config(db_key, str(value), cat)
+    get_settings.cache_clear()
     return get_all_configs()

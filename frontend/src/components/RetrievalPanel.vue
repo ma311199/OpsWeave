@@ -43,11 +43,6 @@
 import { ref } from 'vue'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
-
-const props = defineProps({
-  role: { type: String, default: 'admin' },
-})
-
 const query = ref('')
 const results = ref([])
 const loading = ref(false)
@@ -64,7 +59,6 @@ async function search() {
     const resp = await axios.post('/api/retrieval/search', {
       query: q,
       top_k: 5,
-      role: props.role,
     })
     results.value = resp.data.results
   } catch (err) {

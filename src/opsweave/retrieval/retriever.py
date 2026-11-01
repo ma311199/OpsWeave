@@ -7,10 +7,10 @@ retrieve() interface for the agent to use.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.schema import NodeRelationship, TextNode
+from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
 
 from ..auth.permissions import PermissionChecker, ResourceType, Role
 from ..config.settings import get_settings
@@ -35,6 +35,7 @@ class Retriever:
     permission_checker: PermissionChecker = field(default_factory=PermissionChecker.default_rules)
 
     def __post_init__(self) -> None:
+        """初始化检索配置与 embedding 客户端，供建索引和查询共用。"""
         self._settings = get_settings()
         self._embedding = OpenAICompatEmbedding.from_settings()
 
@@ -54,6 +55,7 @@ class Retriever:
                             If None, assumes the collection already exists in Milvus.
             collection_name: Milvus collection name.
         """
+        # 有本地文档目录时读入并切分后写入；否则只连接现有 collection。
         vector_store = get_milvus_store(collection_name=collection_name)
 
         if documents_path:
@@ -96,6 +98,7 @@ class Retriever:
         query: str,
         top_k: int | None = None,
         role: Role = Role.ADMIN,
+        user_id: str | None = None,
     ) -> list[RetrievalResult]:
         """Retrieve relevant document chunks for a query.
 
@@ -112,15 +115,21 @@ class Retriever:
 
         self.permission_checker.require(role, ResourceType.RETRIEVAL_INDEX)
 
+        # 普通用户只能检索带有自身 user_id 元数据的向量。
         top_k = top_k or self._settings.retriever_top_k
-        retriever = self.index.as_retriever(similarity_top_k=top_k)
+        filters = None
+        if role is not Role.ADMIN:
+            if not user_id:
+                raise PermissionError("Authenticated user identity is required for retrieval")
+            filters = MetadataFilters(filters=[MetadataFilter(key="user_id", value=user_id)])
+        retriever = self.index.as_retriever(similarity_top_k=top_k, filters=filters)
         nodes = retriever.retrieve(query)
 
         return [
             RetrievalResult(
-                text=node.get_content(),
-                score=float(node.get_score(embed_model=self._embedding)),
-                source=node.metadata.get("file_path", "unknown"),
+                text=node.metadata.get("text", node.get_content()),
+                score=float(node.score or 0.0),
+                source=node.metadata.get("filename", node.metadata.get("file_path", "unknown")), 
             )
             for node in nodes
         ]
