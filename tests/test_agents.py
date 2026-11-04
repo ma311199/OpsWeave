@@ -25,7 +25,7 @@ def reset_agent():
 
 
 def setup_tools(monkeypatch, names=("search_knowledge",)):
-    monkeypatch.setattr("opsweave.tools.mcp_client.list_tools", lambda: [{"server_id": "remote-1" if name == "check_service" else "local", "name": name, "description": f"Tool {name}", "input_schema": {"type": "object"}}
+    monkeypatch.setattr("opsweave.tools.mcp_client.list_tools", lambda: [{"server_id": "remote-1" if name == "check_service" else "local", "name": name, "description": f"Tool {name}", "input_schema": {"type": "object"}, "annotations": {"readOnlyHint": True}}
         for name in names
     ])
 

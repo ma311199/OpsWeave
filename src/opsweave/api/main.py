@@ -7,7 +7,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routes import health, retrieval, chat, config, knowledge, users
+from .routes import health, retrieval, chat, config, knowledge, users, approvals
 
 
 def create_app() -> FastAPI:
@@ -32,6 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
     app.include_router(config.router, prefix="/api/config", tags=["config"])
     app.include_router(knowledge.router, prefix="/api/knowledge", tags=["knowledge"])
+    app.include_router(approvals.router, prefix="/api/approvals", tags=["approvals"])
 
     return app
 

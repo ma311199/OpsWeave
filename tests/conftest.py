@@ -21,6 +21,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(user_store, "_get_conn", get_conn)
     monkeypatch.setattr(knowledge, "_get_conn", get_conn)
     monkeypatch.setattr("opsweave.config.database._get_conn", get_conn)
+    from opsweave.api import approvals, memory_store
+    monkeypatch.setattr(approvals, "_get_conn", get_conn)
+    monkeypatch.setattr(memory_store, "_get_conn", get_conn)
 
     class Settings:
         data_dir = str(tmp_path)

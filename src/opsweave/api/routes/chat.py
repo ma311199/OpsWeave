@@ -41,7 +41,10 @@ async def chat_ws(websocket: WebSocket) -> None:
         data = await websocket.receive_text()
         msg = json.loads(data)
         query = msg.get("query", "")
-
+        conversation_id = msg.get("conversation_id", "")
+        if not isinstance(conversation_id, str) or not conversation_id or len(conversation_id) > 128:
+            await websocket.close(code=4400)
+            return
 
         await websocket.send_json({"type": "thinking", "content": "正在分析问题..."})
         token = websocket.cookies.get("opsweave_session")
@@ -49,11 +52,23 @@ async def chat_ws(websocket: WebSocket) -> None:
         if not session_user:
             await websocket.close(code=4401)
             return
-        state = await asyncio.to_thread(run_agent, query, role, session_user[0])
+        from ..memory_store import append_long_term_memory, append_turn, get_history, get_long_term_memory
+
+        username = session_user[0]
+        history = await asyncio.to_thread(get_history, username, conversation_id)
+        memory = await asyncio.to_thread(get_long_term_memory, username)
+        state = await asyncio.to_thread(run_agent, query, role, username, conversation_id, history, memory)
+        if state.get("route") == "approval_pending":
+            approval = state["approval_pending"]
+            await websocket.send_json({"type": "approval_required", **approval})
+            await websocket.send_json({"type": "done"})
+            return
+        await asyncio.to_thread(append_turn, username, conversation_id, query, state["answer"])
+        if msg.get("remember") and isinstance(msg["remember"], str):
+            await asyncio.to_thread(append_long_term_memory, username, msg["remember"])
         for call in state.get("tool_calls", []):
             await websocket.send_json({
                 "type": "tool",
-                "server_id": call["server_id"],
                 "tool": call["name"],
                 "content": "工具调用完成",
             })

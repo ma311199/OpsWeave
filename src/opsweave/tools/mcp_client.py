@@ -62,6 +62,7 @@ async def _list_tools() -> list[dict[str, Any]]:
                     "name": tool.name,
                     "description": tool.description,
                     "input_schema": tool.inputSchema,
+                    "annotations": getattr(tool, "annotations", None),
                 })
         return tools
 
