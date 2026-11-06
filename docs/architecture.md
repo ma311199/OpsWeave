@@ -1,5 +1,10 @@
 # OpsWeave 架构设计文档
 
+## 直连检索管道
+
+- `/api/retrieval/search` 不经过聊天 Agent，由 `opsweave.agents.retrieval_pipeline` 的 LangGraph 管道独立处理：连接索引 →（可选，预留）问题分解 → 向量检索合并去重 →（可选，预留）重排。
+- 检索索引按 collection 在进程内缓存；管理员修改 Milvus/Embedding 配置或删除 Milvus 集合时清空缓存。混合检索（向量 + 关键词融合）计划在检索节点内扩展。
+
 ## 记忆
 
 - 短期会话记忆存放在 SQLite `chat_messages` 表，按用户和 `conversation_id` 隔离。

@@ -17,6 +17,7 @@ npm install
 ```text
 OpsWeave/
 ├── src/opsweave/
+│   ├── agents/              # LangGraph 编排（直连检索管道）
 │   ├── api/                 # FastAPI、认证、Agent 与 API routes
 │   ├── auth/                # 权限模型
 │   ├── config/              # Settings、SQLite 配置
@@ -88,6 +89,7 @@ npm run build
 
 - 账号注册、登录、登出及管理员用户列表。
 - 基于 LangGraph 的聊天路由：直接回答、内部检索或 MCP 知识库搜索。
+- 基于 LangGraph 的直连检索管道（`/api/retrieval/search`）：连接索引、检索合并去重，预留问题分解/重排/混合检索扩展节点。
 - Milvus 检索与管理员索引构建。
 - 文档上传、切分策略选择、管理员审批、索引处理、chunk 查看和删除。
 - 管理员 LLM、Embedding、Milvus、Agent 配置及服务连通性测试。

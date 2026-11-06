@@ -9,6 +9,7 @@ dependencies = [
     "langgraph>=0.2.60",
     "langchain-core>=0.3.29",
     "langchain-openai>=0.2.14",
+    "langchain-text-splitters>=0.3.0",
     "fastmcp>=2.0.0",
     "llama-index-core>=0.12.0",
     "llama-index-llms-langchain>=0.4.0",

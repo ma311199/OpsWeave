@@ -28,7 +28,9 @@
 
 ### `POST /search`
 
-需要登录及 `RETRIEVAL_INDEX` 权限。请求字段：`query`（字符串）、`top_k`（1–20，默认 5）。按当前用户身份执行检索过滤，返回 `query` 与 `results`；每项包含 `text`、`score`、`source`。
+需要登录及 `RETRIEVAL_INDEX` 权限。请求字段：`query`（字符串）、`top_k`（1–20，默认 5）、`collection_name`（可选，默认 `opsweave`）、`options`（可选，含布尔开关 `decompose`、`rerank`，当前为预留占位，默认关闭）。
+
+该接口不经过聊天 Agent，由独立的 LangGraph 直连检索管道（`opsweave.agents.retrieval_pipeline`）编排：连接/构建目标 collection 索引（按 collection 进程内缓存；管理员变更 Milvus/Embedding 配置或删除集合时自动清空）→（可选）问题分解 → 向量检索（非管理员按当前用户过滤）并合并去重 →（可选）重排 → 返回 `query` 与 `results`；每项包含 `text`、`score`、`source`。问题分解、重排与混合检索为后续版本预留的扩展节点。索引连接失败时返回 503。
 
 ### `POST /build`
 

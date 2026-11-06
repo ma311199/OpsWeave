@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from ..auth import require_admin
+from ...agents.retrieval_pipeline import clear_retrieval_index_cache
 from ...config.database import get_all_configs, update_configs, set_config, get_config
 from ...config.settings import get_settings
 
@@ -184,7 +185,10 @@ def update_configs_endpoint(req: ConfigUpdate) -> dict:
     
     update_configs(updates)
     get_settings.cache_clear()
-    
+    # Milvus/Embedding 配置变化会使已缓存的直连检索索引失效，需清空重建
+    if any(key.startswith(("milvus_", "embedding_")) for key in updates):
+        clear_retrieval_index_cache()
+
     return {"status": "ok", "message": "配置已保存"}
 
 
@@ -505,6 +509,8 @@ def delete_milvus_collection(name: str) -> dict:
             return {"status": "error", "message": f"集合 '{name}' 不存在"}
         
         utility.drop_collection(name)
+        # 清除该 collection 的直连检索索引缓存，避免继续引用已删除的集合
+        clear_retrieval_index_cache(name)
         descriptions = get_config("milvus_collection_descriptions") or "{}"
         try:
             description_overrides = json.loads(descriptions)

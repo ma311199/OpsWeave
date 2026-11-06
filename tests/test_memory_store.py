@@ -1,8 +1,15 @@
-from opsweave.api.memory_store import append_long_term_memory, append_turn, get_history, get_long_term_memory
+from opsweave.api.memory_store import (
+    _init_memory,
+    append_long_term_memory,
+    append_turn,
+    get_history,
+    get_long_term_memory,
+)
 from opsweave.config.database import _get_conn
 
 
 def test_short_term_history_is_isolated_and_limited(client):
+    _init_memory()
     with _get_conn() as conn:
         conn.execute("DELETE FROM chat_messages")
     append_turn("alice", "conversation-a", "你好", "你好！")

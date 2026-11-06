@@ -8,7 +8,7 @@ echo    OpsWeave Start Script
 echo ============================================
 echo.
 
-echo [1/2] Starting backend (http://localhost:8001)...
+echo [1/2] Starting backend (http://localhost:8000)...
 where uv >nul 2>&1
 if errorlevel 1 (
     echo uv was not found on PATH. Install uv before starting the backend.
@@ -21,12 +21,12 @@ if not exist "%~dp0frontend\node_modules\.bin\vite.cmd" (
     exit /b 1
 )
 
-start "OpsWeave Backend" /D "%~dp0" cmd /c "uv run python -m uvicorn opsweave.api.main:app --host 127.0.0.1 --port 8001"
+start "OpsWeave Backend" /D "%~dp0" cmd /c "uv run python -m uvicorn opsweave.api.main:app --host 127.0.0.1 --port 8000"
 
 echo Waiting for backend health check...
 set "BACKEND_READY="
 for /l %%i in (1,1,15) do (
-    powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8001/api/health/ping -TimeoutSec 1 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
+    powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/api/health/ping -TimeoutSec 1 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
     if not errorlevel 1 set "BACKEND_READY=1"
     if defined BACKEND_READY goto backend_ready
     timeout /t 1 >nul
@@ -58,7 +58,7 @@ if "%EXISTING_VITE%"=="yes" echo Reusing existing Vite server at http://localhos
 echo.
 echo ============================================
 echo    Services started
-echo    Backend:  http://127.0.0.1:8001
+echo    Backend:  http://127.0.0.1:8000
 echo    Frontend: http://127.0.0.1:%FRONTEND_PORT%
 echo ============================================
 echo.
