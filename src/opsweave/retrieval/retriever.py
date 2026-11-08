@@ -32,7 +32,9 @@ class Retriever:
     """Milvus-backed vector retriever using LlamaIndex."""
 
     index: VectorStoreIndex | None = None
-    permission_checker: PermissionChecker = field(default_factory=PermissionChecker.default_rules)
+    permission_checker: PermissionChecker = field(
+        default_factory=PermissionChecker.default_rules
+    )
 
     def __post_init__(self) -> None:
         """初始化检索配置与 embedding 客户端，供建索引和查询共用。"""
@@ -75,8 +77,8 @@ class Retriever:
             )
             # Add relationship metadata
             for node in nodes:
-                node.relationships[NodeRelationship.SOURCE] = (
-                    node.metadata.get("file_path", "unknown")
+                node.relationships[NodeRelationship.SOURCE] = node.metadata.get(
+                    "file_path", "unknown"
                 )
             self.index = VectorStoreIndex.from_documents(
                 nodes,
@@ -120,8 +122,12 @@ class Retriever:
         filters = None
         if role is not Role.ADMIN:
             if not user_id:
-                raise PermissionError("Authenticated user identity is required for retrieval")
-            filters = MetadataFilters(filters=[MetadataFilter(key="user_id", value=user_id)])
+                raise PermissionError(
+                    "Authenticated user identity is required for retrieval"
+                )
+            filters = MetadataFilters(
+                filters=[MetadataFilter(key="user_id", value=user_id)]
+            )
         retriever = self.index.as_retriever(similarity_top_k=top_k, filters=filters)
         nodes = retriever.retrieve(query)
 
@@ -129,7 +135,9 @@ class Retriever:
             RetrievalResult(
                 text=node.metadata.get("text", node.get_content()),
                 score=float(node.score or 0.0),
-                source=node.metadata.get("filename", node.metadata.get("file_path", "unknown")), 
+                source=node.metadata.get(
+                    "filename", node.metadata.get("file_path", "unknown")
+                ),
             )
             for node in nodes
         ]

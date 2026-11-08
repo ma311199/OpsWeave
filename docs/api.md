@@ -44,9 +44,18 @@
 {"query":"如何排查数据库连接超时？"}
 ```
 
-服务端依次发送 JSON 消息：`thinking`，每次 MCP 调用对应一个 `tool`（包含实际工具名），随后发送 `answer` 或 `clarify`，最后发送 `done`；异常时发送 `error`。Agent 将动态发现的 MCP 工具清单交给 LLM 决策，并可在收到工具结果后继续调用工具，直到回答、澄清或达到迭代上限。
+服务端发送 JSON 消息：`thinking`；每次 MCP 调用完成后发送 `tool`（含工具名）；需要人工审批时发送 `approval_required`（含审批信息）后发送 `done`；否则发送 `answer` 或 `clarify`，最后发送 `done`。异常时发送 `error`。Agent 将动态发现的 MCP 工具清单交给 LLM 决策，并可在收到工具结果后继续调用工具，直到回答、澄清、待审批或达到迭代上限。
 
-## 5. 知识库 `/api/knowledge`
+## 5. 工具审批 `/api/approvals`
+
+需要登录。普通用户只能查看和处理自己的审批，管理员可查看和处理全部审批。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/approvals` | 查询当前用户可见的审批项 |
+| POST | `/api/approvals/{approval_id}/decision` | 请求体 `{"approve":true}` 或 `false`；批准后同步执行工具并返回结果，拒绝则返回 `rejected` |
+
+## 6. 知识库 `/api/knowledge`
 
 所有接口均要求登录。普通用户仅能查看和操作自己的文档；管理员可跨用户查看并审批。
 
@@ -68,22 +77,27 @@
 
 | ID | 实现 | 参数 |
 |---|---|---|
-| `sentence` | LlamaIndex `SentenceSplitter`，优先按句子边界切分 | `chunk_size`、`overlap`（Token） |
-| `token` | LlamaIndex `TokenTextSplitter`，Token 滑动窗口 | `chunk_size`、`overlap`（Token） |
-| `semantic` | LlamaIndex `SemanticSplitterNodeParser`，按语义变化分段 | `semantic_max_chunk_size` 为预切分安全上限；`chunk_size`、`overlap` 仍作为校验/保存参数 |
+| `fixed` | LlamaIndex `TokenTextSplitter` 固定 Token 块，关闭重叠 | `chunk_size` |
+| `sliding` | LlamaIndex `TokenTextSplitter` Token 滑动窗口 | `chunk_size`、`overlap` |
+| `sentence` | LlamaIndex `SentenceSplitter`，优先按句子边界切分 | `chunk_size`、`overlap` |
+| `paragraph` | LangChain `RecursiveCharacterTextSplitter`，优先按段落/换行切分 | `chunk_size`、`overlap` |
+| `recursive` | LangChain 递归文本切分，按段落、句子等分隔符逐级切分 | `chunk_size`、`overlap` |
+| `structure` | LangChain 结构化切分，支持 Markdown、HTML、LaTeX 分隔符 | `chunk_size`、`overlap`、`structure_format` |
+| `semantic` | LlamaIndex `SemanticSplitterNodeParser`，按语义变化分段 | `semantic_max_chunk_size` 预切分上限、`semantic_threshold`；`chunk_size`、`overlap` 为校验/保存参数 |
+| `summary` | 句子切分后由 LLM 生成标题、摘要和关键词，合并到 embedding 文本 | `chunk_size`、`overlap` |
 
 管理员在 `/api/config/` 中配置 `embedding.max_tokens`，默认 8192。该限制无法从 OpenAI 兼容 Embedding API 通用查询，需按实际模型服务文档设置。处理时使用 LlamaIndex tokenizer 统计每个最终 embedding 文本的 token 数；任一块超过上限即停止索引、将文档标记为 `failed` 并返回超限块信息，不会自动二次拆分。
 
 普通用户申请后状态变为 `pending`，管理员批准后立即返回并异步处理，状态转为 `processing`；管理员本人直接开始构建也会进入 `processing`。前端在处理期间轮询文档状态，完成、拒绝或失败状态会显示在文档列表中。管理员文档列表默认不包含尚未申请的 `uploaded` 文档，并支持按用户、collection 和状态筛选。待审批申请可由申请人撤销，撤销后恢复 `uploaded`。
 
-## 6. 配置 `/api/config`
+## 7. 配置 `/api/config`
 
 此路由组要求管理员角色。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/config/` | 读取 LLM、Embedding、Milvus、Agent 配置；密钥会掩码显示 |
-| PUT | `/api/config/` | 更新配置并保存到 SQLite；Embedding 配置含 `max_tokens` 上限 |
+| PUT | `/api/config/` | 更新非敏感配置并保存到 SQLite；LLM/Embedding/Milvus 密钥从环境变量读取，不写入 SQLite；Embedding 配置含 `max_tokens` 上限 |
 | POST | `/api/config/test/{service}` | 测试 `llm`、`embedding` 或 `milvus` 连接 |
 | GET | `/api/config/milvus/collections` | 列出 Milvus collections 与 schema 信息 |
 | POST | `/api/config/milvus/create-collection` | 创建 collection |
@@ -92,11 +106,11 @@
 
 配置读写涵盖 LLM、Embedding、Milvus、Agent 及 collection 定义。详细请求字段以 FastAPI OpenAPI schema 为准。
 
-## 7. MCP 工具
+## 8. MCP 工具
 
 FastMCP 服务端在 `opsweave.tools.mcp_server` 暴露 MCP 工具。Agent 通过 MCP Client 动态获取工具名称、描述和参数 schema，再由 LLM 选择具体工具并传递参数；每次调用附加已认证用户标识和 `MCP_TOKEN`。当前注册的知识搜索工具为 `search_knowledge`，参数 `query`、`top_k`（1–20）、`user_id`、`token`，结果包含 `source`、`score`、`text`。MCP 传输由 FastMCP 配置决定，不属于 `/api` REST 路由。
 
-## 8. Python 模块接口
+## 9. Python 模块接口
 
 ### 配置
 

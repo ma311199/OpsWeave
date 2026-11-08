@@ -16,26 +16,24 @@ CREATE TABLE IF NOT EXISTS configs (
 );
 """
 
-# Config keys that are persisted in SQLite and override .env at startup.
+# Non-sensitive config keys persisted in SQLite and used as settings overrides.
 # Maps db_key -> (Settings field name, category)
 CONFIG_MAP: dict[str, tuple[str, str]] = {
     # LLM
-    "llm_base_url":        ("llm_base_url",        "llm"),
-    "llm_api_key":         ("llm_api_key",         "llm"),
-    "llm_model":           ("llm_model",           "llm"),
-    "llm_temperature":     ("llm_temperature",     "llm"),
+    "llm_base_url": ("llm_base_url", "llm"),
+    "llm_model": ("llm_model", "llm"),
+    "llm_temperature": ("llm_temperature", "llm"),
     # Embedding
-    "embedding_base_url":  ("embedding_base_url",  "embedding"),
-    "embedding_api_key":   ("embedding_api_key",   "embedding"),
-    "embedding_model":     ("embedding_model",     "embedding"),
+    "embedding_base_url": ("embedding_base_url", "embedding"),
+    "embedding_api_key": ("embedding_api_key", "embedding"),
+    "embedding_model": ("embedding_model", "embedding"),
     "embedding_dimension": ("embedding_dimension", "embedding"),
     "embedding_max_tokens": ("embedding_max_tokens", "embedding"),
     # Milvus
-    "milvus_uri":          ("milvus_uri",          "milvus"),
-    "milvus_user":         ("milvus_user",         "milvus"),
-    "milvus_password":     ("milvus_password",     "milvus"),
-    "milvus_database":     ("milvus_database",     "milvus"),
-    "milvus_collections":  ("milvus_collections",  "milvus"),
+    "milvus_uri": ("milvus_uri", "milvus"),
+    "milvus_user": ("milvus_user", "milvus"),
+    "milvus_database": ("milvus_database", "milvus"),
+    "milvus_collections": ("milvus_collections", "milvus"),
     # Agent and MCP
     "agent_max_iterations": ("agent_max_iterations", "agent"),
     "mcp_servers": ("mcp_servers", "mcp"),
@@ -59,6 +57,10 @@ def init_db() -> None:
     """Create configs table if not exists."""
     with _get_conn() as conn:
         conn.execute(_TABLE_DDL)
+        conn.execute(
+            "DELETE FROM configs WHERE key IN (?, ?, ?)",
+            ("llm_api_key", "embedding_api_key", "milvus_password"),
+        )
         conn.commit()
 
 
@@ -74,9 +76,7 @@ def get_config(key: str) -> str | None:
     """Return a single config value or None."""
     init_db()
     with _get_conn() as conn:
-        row = conn.execute(
-            "SELECT value FROM configs WHERE key = ?", (key,)
-        ).fetchone()
+        row = conn.execute("SELECT value FROM configs WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else None
 
 
@@ -98,7 +98,7 @@ def update_configs(configs: dict[str, Any]) -> dict[str, str]:
 
     Only keys present in CONFIG_MAP are persisted.
     """
-    category = configs.pop("_category", "general") if "_category" in configs else "general"
+    configs.pop("_category", None)
     for key, value in configs.items():
         if key not in CONFIG_MAP:
             continue

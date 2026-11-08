@@ -42,7 +42,11 @@ async def chat_ws(websocket: WebSocket) -> None:
         msg = json.loads(data)
         query = msg.get("query", "")
         conversation_id = msg.get("conversation_id", "")
-        if not isinstance(conversation_id, str) or not conversation_id or len(conversation_id) > 128:
+        if (
+            not isinstance(conversation_id, str)
+            or not conversation_id
+            or len(conversation_id) > 128
+        ):
             await websocket.close(code=4400)
             return
 
@@ -52,26 +56,37 @@ async def chat_ws(websocket: WebSocket) -> None:
         if not session_user:
             await websocket.close(code=4401)
             return
-        from ..memory_store import append_long_term_memory, append_turn, get_history, get_long_term_memory
+        from ..memory_store import (
+            append_long_term_memory,
+            append_turn,
+            get_history,
+            get_long_term_memory,
+        )
 
         username = session_user[0]
         history = await asyncio.to_thread(get_history, username, conversation_id)
         memory = await asyncio.to_thread(get_long_term_memory, username)
-        state = await asyncio.to_thread(run_agent, query, role, username, conversation_id, history, memory)
+        state = await asyncio.to_thread(
+            run_agent, query, role, username, conversation_id, history, memory
+        )
         if state.get("route") == "approval_pending":
             approval = state["approval_pending"]
             await websocket.send_json({"type": "approval_required", **approval})
             await websocket.send_json({"type": "done"})
             return
-        await asyncio.to_thread(append_turn, username, conversation_id, query, state["answer"])
+        await asyncio.to_thread(
+            append_turn, username, conversation_id, query, state["answer"]
+        )
         if msg.get("remember") and isinstance(msg["remember"], str):
             await asyncio.to_thread(append_long_term_memory, username, msg["remember"])
         for call in state.get("tool_calls", []):
-            await websocket.send_json({
-                "type": "tool",
-                "tool": call["name"],
-                "content": "工具调用完成",
-            })
+            await websocket.send_json(
+                {
+                    "type": "tool",
+                    "tool": call["name"],
+                    "content": "工具调用完成",
+                }
+            )
         if state.get("route") == "clarify":
             await websocket.send_json({"type": "clarify", "content": state["answer"]})
         else:

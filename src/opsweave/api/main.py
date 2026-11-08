@@ -7,7 +7,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routes import health, retrieval, chat, config, knowledge, users, approvals
+from .routes import approvals, chat, config, health, knowledge, retrieval, users
 
 
 def create_app() -> FastAPI:
@@ -17,10 +17,17 @@ def create_app() -> FastAPI:
         description="Agentic RAG system for operations",
     )
 
-    # CORS for Vue frontend
+    allowed_origins = [
+        origin.strip()
+        for origin in os.getenv(
+            "CORS_ALLOW_ORIGINS",
+            "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174",
+        ).split(",")
+        if origin.strip()
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

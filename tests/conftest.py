@@ -22,6 +22,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(knowledge, "_get_conn", get_conn)
     monkeypatch.setattr("opsweave.config.database._get_conn", get_conn)
     from opsweave.api import approvals, memory_store
+
     monkeypatch.setattr(approvals, "_get_conn", get_conn)
     monkeypatch.setattr(memory_store, "_get_conn", get_conn)
 
@@ -32,7 +33,14 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(knowledge, "get_settings", lambda: Settings())
     app = create_app()
     app.dependency_overrides[knowledge.current_user] = lambda: ("alice", Role.VIEWER)
+    from opsweave.api.auth import require_admin
+
+    app.dependency_overrides[require_admin] = lambda: Role.ADMIN
+    from opsweave.api.routes import config
+
+    app.dependency_overrides[config.require_admin] = lambda: Role.ADMIN
     from opsweave.api.auth import require_role
+
     app.dependency_overrides[require_role] = lambda: Role.VIEWER
     with TestClient(app) as test_client:
         yield test_client
@@ -49,12 +57,36 @@ def mock_data(tmp_path):
         ],
         "collections": [{"name": "ws", "description": "测试知识库", "row_count": 2}],
         "documents": [
-            {"id": "doc-alice", "owner": "alice", "filename": "alice.txt", "content": b"Alice test document"},
-            {"id": "doc-bob", "owner": "bob", "filename": "bob.txt", "content": b"Bob private document"},
+            {
+                "id": "doc-alice",
+                "owner": "alice",
+                "filename": "alice.txt",
+                "content": b"Alice test document",
+            },
+            {
+                "id": "doc-bob",
+                "owner": "bob",
+                "filename": "bob.txt",
+                "content": b"Bob private document",
+            },
         ],
         "chunks": [
-            {"id": "chunk-alice-1", "document_id": "doc-alice", "owner": "alice", "ordinal": 0, "text": "Alice test chunk", "embedding_text": "Alice summary"},
-            {"id": "chunk-bob-1", "document_id": "doc-bob", "owner": "bob", "ordinal": 0, "text": "Bob private chunk", "embedding_text": "Bob summary"},
+            {
+                "id": "chunk-alice-1",
+                "document_id": "doc-alice",
+                "owner": "alice",
+                "ordinal": 0,
+                "text": "Alice test chunk",
+                "embedding_text": "Alice summary",
+            },
+            {
+                "id": "chunk-bob-1",
+                "document_id": "doc-bob",
+                "owner": "bob",
+                "ordinal": 0,
+                "text": "Bob private chunk",
+                "embedding_text": "Bob summary",
+            },
         ],
     }
 
@@ -72,9 +104,14 @@ def milvus(monkeypatch, mock_data):
     class Collection:
         def __init__(self, name):
             self.name = name
-            self.num_entities = next(item["row_count"] for item in mock_data["collections"] if item["name"] == name)
+            self.num_entities = next(
+                item["row_count"]
+                for item in mock_data["collections"]
+                if item["name"] == name
+            )
 
     import pymilvus
+
     monkeypatch.setattr(pymilvus, "utility", Utility)
     monkeypatch.setattr(pymilvus, "Collection", Collection)
     return names

@@ -103,8 +103,14 @@ class OpenAICompatEmbedding(BaseEmbedding):
         self._validate_embeddings(embeddings, len(texts))
         return embeddings
 
-    def _validate_embeddings(self, embeddings: list[list[float]], expected_count: int) -> None:
+    def _validate_embeddings(
+        self, embeddings: list[list[float]], expected_count: int
+    ) -> None:
         if len(embeddings) != expected_count:
-            raise ValueError(f"Expected {expected_count} embeddings, received {len(embeddings)}")
+            raise ValueError(
+                f"Expected {expected_count} embeddings, received {len(embeddings)}"
+            )
         if any(len(embedding) != self.dimension for embedding in embeddings):
-            raise ValueError(f"Embedding dimension does not match configured dimension {self.dimension}")
+            raise ValueError(
+                f"Embedding dimension does not match configured dimension {self.dimension}"
+            )

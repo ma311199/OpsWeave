@@ -76,6 +76,8 @@ def get_settings() -> Settings:
     settings = Settings()
     overrides = _load_sqlite_overrides()
     for key, value in overrides.items():
+        if key in {"llm_api_key", "embedding_api_key", "milvus_password"}:
+            continue
         if hasattr(settings, key):
             attr = getattr(settings, key)
             if isinstance(attr, float):

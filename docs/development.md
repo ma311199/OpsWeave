@@ -39,7 +39,7 @@ Windows 可在项目根目录运行：
 .\start.bat
 ```
 
-脚本检查 `uv` 和前端依赖后启动后端 `127.0.0.1:8001`，等待健康检查通过再启动 Vite（默认 `127.0.0.1:5173`；端口占用时使用 5174）。停止服务可运行：
+脚本检查 `uv` 和前端依赖后启动后端 `127.0.0.1:8000`，等待健康检查通过再启动 Vite（默认 `127.0.0.1:5173`；端口占用时使用 5174）。停止服务可运行：
 
 ```powershell
 .\stop.bat
@@ -48,7 +48,7 @@ Windows 可在项目根目录运行：
 也可分开启动：
 
 ```powershell
-uv run python -m uvicorn opsweave.api.main:app --host 127.0.0.1 --port 8001
+uv run python -m uvicorn opsweave.api.main:app --host 127.0.0.1 --port 8000
 ```
 
 另开终端运行前端：
@@ -58,7 +58,7 @@ Set-Location frontend
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-后端健康检查为 `http://127.0.0.1:8001/api/health/ping`。API 路由和 WebSocket 协议见 `docs/api.md`。
+后端健康检查为 `http://127.0.0.1:8000/api/health/ping`。API 路由和 WebSocket 协议见 `docs/api.md`。
 
 ## 4. 代码检查与测试
 

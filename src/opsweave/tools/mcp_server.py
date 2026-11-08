@@ -21,7 +21,9 @@ def _require_mcp_token(token: str | None) -> None:
 
 
 @mcp.tool()
-def search_knowledge(query: str, top_k: int = 5, user_id: str = "", token: str = "") -> list[dict[str, str | float]]:
+def search_knowledge(
+    query: str, top_k: int = 5, user_id: str = "", token: str = ""
+) -> list[dict[str, str | float]]:
     """Search the OpsWeave operational knowledge base."""
     _require_mcp_token(token)
     if not user_id:
@@ -37,7 +39,9 @@ def search_knowledge(query: str, top_k: int = 5, user_id: str = "", token: str =
 
     retriever = Retriever()
     retriever.build_index(collection_name="opsweave")
-    results = retriever.retrieve(query=query, top_k=top_k, role=user_role, user_id=user_id)
+    results = retriever.retrieve(
+        query=query, top_k=top_k, role=user_role, user_id=user_id
+    )
     return [
         {"source": item.source, "score": round(item.score, 4), "text": item.text}
         for item in results

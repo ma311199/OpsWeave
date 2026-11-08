@@ -86,11 +86,11 @@ OpsWeave 是面向运维场景的 Agentic RAG 系统：用户通过聊天向 Lan
 
 | # | 问题 | 位置/证据 | 影响 |
 |---|---|---|---|
-| 1 | `langchain_text_splitters` 被直接 import，但未在 `pyproject.toml` 声明，干净环境中 `ModuleNotFoundError` | `src/opsweave/api/routes/knowledge.py:213` | paragraph/recursive/structure 三种切分策略运行即崩 |
+| 1 | 已处理：`langchain-text-splitters` 已声明在 `pyproject.toml`；仍需在干净环境验证依赖同步与切分策略 | `pyproject.toml` | 依赖安装和策略运行待验证 |
 | 2 | `/api/retrieval/search` 新建 `Retriever()` 后未调用 `build_index()`，`is_ready` 恒为 False，被 `RuntimeError` 捕获后固定返回 503 | `src/opsweave/api/routes/retrieval.py:32-36` | 知识库检索页与 MCP 之外的直连检索实际不可用；现有测试因 mock 了 Retriever 未暴露此问题 |
 | 3 | `tests/test_memory_store.py` 失败：测试直接删 `chat_messages` 表，但未先触发建表（建表是惰性的） | 实测 `pytest`：26 passed, 1 failed | 测试红灯 |
-| 4 | 端口文档不一致：文档写后端 8001，`start.bat`、Vite 代理、main.py 默认均为 8000 | `docs/deployment.md` vs `start.bat:24`、`frontend/vite.config.js:23` | 按文档手动启动会代理失败 |
-| 5 | API 文档只记录 3 种切分策略，代码实际 8 种 | `docs/api.md:67-71` vs knowledge.py | 文档漂移 |
+| 4 | 已处理：开发与部署文档后端端口统一为 8000 | `docs/development.md`、`docs/deployment.md` | 配置与脚本已对齐 |
+| 5 | 已处理：API 文档已列出全部 8 种切分策略及审批接口、WebSocket 审批消息 | `docs/api.md` | 文档已对齐，待实现验收核实 |
 | 6 | 每次聊天都重新 `asyncio.run` 拉起本地 MCP Server 子进程并发现工具 | `src/opsweave/tools/mcp_client.py:104-105` | 每轮对话额外的进程启动开销与失败面 |
 | 7 | 审批通过后经独立 REST 调用执行工具，原聊天轮次已结束，执行结果不会回到原对话上下文 | `src/opsweave/api/routes/approvals.py` + `routes/chat.py:61-65` | 审批后的工具结果不会驱动 Agent 继续作答 |
 | 8 | 密钥策略冲突：代码规范要求密钥只在 `.env`，配置 API 实际把 LLM/Embedding/Milvus 密钥明文写入 SQLite | `docs/code_standards.md:89` vs `config/database.py` | 需明确取舍并补充加密或改为不回存 |
@@ -106,14 +106,14 @@ OpsWeave 是面向运维场景的 Agentic RAG 系统：用户通过聊天向 Lan
 
 1. 补依赖：在 `pyproject.toml` 增加 `langchain-text-splitters`（与当前 LlamaIndex/LangChain 版本兼容的约束），`uv sync` 后验证三种递归类切分策略。
 2. ~~修复直连检索~~ 已完成：`/api/retrieval/search` 改走 LangGraph 直连检索管道（连接索引 → 检索合并去重，预留问题分解/重排/混合检索节点），索引按 collection 缓存并在配置/集合变更时清理；已补回归测试。
-3. 修复失败测试：让记忆存储在应用启动或测试 fixture 中显式初始化表，`pytest` 全绿。
+3. ~~修复失败测试~~ 已调整 `test_memory_store.py` 显式初始化所需表；需待测试环境正常后执行全量验证。
 
 ### 5.2 一致性与安全（P1）
 
-4. 统一后端端口为 8000（修改文档），或统一为 8001（修改脚本与代理）；二选一后全局对齐。
-5. 更新 `docs/api.md`：补齐 8 种切分策略、审批 REST 路由、WebSocket `approval_required` 消息等实际协议。
-6. 明确密钥落库策略：方案 A 为密钥仅存 `.env`/环境变量、SQLite 只存非敏感项；方案 B 为保留现状但用本机密钥加密。默认建议方案 A。
-7. 收紧 CORS 配置为可配置的可信来源列表。
+4. ~~统一后端端口~~ 已完成：开发与部署文档统一为 8000。
+5. ~~更新 `docs/api.md`~~ 已完成：补齐 8 种切分策略、审批 REST 路由和 WebSocket `approval_required` 消息。
+6. ~~明确密钥落库策略~~ 已采用方案 A：LLM/Embedding/Milvus 密钥从环境变量读取，SQLite 不保存敏感项；历史落库密钥会在数据库初始化时清除。
+7. ~~收紧 CORS 配置~~ 已改为 `CORS_ALLOW_ORIGINS` 可信来源列表，默认仅允许本地 Vite 地址。
 
 ### 5.3 测试与工程（P1）
 

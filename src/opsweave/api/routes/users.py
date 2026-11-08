@@ -4,9 +4,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from ..auth import require_admin
-from ..user_store import authenticate_user, list_users, logout_token, register_user, user_for_token
 from ...auth.permissions import Role
+from ..auth import require_admin
+from ..user_store import (
+    authenticate_user,
+    list_users,
+    logout_token,
+    register_user,
+    user_for_token,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 _bearer = HTTPBearer(auto_error=False)
@@ -32,21 +38,39 @@ def login(credentials: Credentials, request: Request, response: Response) -> dic
     if not result:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     token, role = result
-    response.set_cookie("opsweave_session", token, httponly=True, samesite="lax", secure=request.url.scheme == "https", max_age=604800)
+    response.set_cookie(
+        "opsweave_session",
+        token,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        max_age=604800,
+    )
     return {"username": credentials.username, "role": role}
 
 
 @router.post("/logout")
-def logout(request: Request, response: Response, credentials: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> dict:
-    token = request.cookies.get("opsweave_session") or (credentials.credentials if credentials else None)
+def logout(
+    request: Request,
+    response: Response,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> dict:
+    token = request.cookies.get("opsweave_session") or (
+        credentials.credentials if credentials else None
+    )
     logout_token(token)
     response.delete_cookie("opsweave_session")
     return {"status": "ok"}
 
 
 @router.get("/me")
-def me(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> dict:
-    token = request.cookies.get("opsweave_session") or (credentials.credentials if credentials else None)
+def me(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> dict:
+    token = request.cookies.get("opsweave_session") or (
+        credentials.credentials if credentials else None
+    )
     user = user_for_token(token)
     if not user:
         raise HTTPException(status_code=401, detail="请先登录")

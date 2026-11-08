@@ -27,7 +27,7 @@ npm install
 - `MILVUS_URI`、`MILVUS_USER`、`MILVUS_PASSWORD`、`MILVUS_DATABASE`
 - `DATA_DIR`、`ADMIN_INITIAL_PASSWORD`、角色 token 与 `MCP_TOKEN`
 
-部分应用设置可在管理员配置页面修改并保存到 `DATA_DIR/opsweave.db`。密钥不得提交到版本库；请为生产环境使用独立凭据。
+非敏感应用设置可在管理员配置页面修改并保存到 `DATA_DIR/opsweave.db`；LLM、Embedding、Milvus 密钥只从环境变量或 `.env` 加载，不保存到 SQLite。密钥不得提交到版本库；请为生产环境使用独立凭据。
 
 ## 3. 本地启动
 
@@ -37,7 +37,7 @@ Windows 在项目根目录执行：
 .\start.bat
 ```
 
-脚本启动后端于 `127.0.0.1:8001`，健康检查成功后启动前端 Vite，默认地址为 `127.0.0.1:5173`；若 5173 被非 Vite 程序占用则使用 5174。停止脚本：
+脚本启动后端于 `127.0.0.1:8000`，健康检查成功后启动前端 Vite，默认地址为 `127.0.0.1:5173`；若 5173 被非 Vite 程序占用则使用 5174。停止脚本：
 
 ```powershell
 .\stop.bat
@@ -46,7 +46,7 @@ Windows 在项目根目录执行：
 手动启动后端：
 
 ```powershell
-uv run python -m uvicorn opsweave.api.main:app --host 127.0.0.1 --port 8001
+uv run python -m uvicorn opsweave.api.main:app --host 127.0.0.1 --port 8000
 ```
 
 手动启动前端：
@@ -72,7 +72,7 @@ npm run build
 生产环境建议：
 
 - 将 Uvicorn 绑定到受控网络接口，并由反向代理提供 HTTPS。
-- 把 CORS `allow_origins` 从当前开发配置的通配符改为可信前端来源。
+- 通过 `CORS_ALLOW_ORIGINS` 设置逗号分隔的可信前端来源列表；默认仅允许本地 Vite 开发地址。
 - 设置强认证凭据及 `MCP_TOKEN`，限制管理员与 MCP 服务访问。
 - 将 `DATA_DIR` 指向持久化目录并做好 SQLite 备份；Milvus 按其自身策略备份。
 - 确保后端能够访问 Milvus、LLM 与 Embedding 服务。

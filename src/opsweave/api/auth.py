@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import secrets
-
 from http.cookies import SimpleCookie
 
 from fastapi import HTTPException, Request, Security, WebSocket
@@ -28,7 +27,8 @@ def _role_for_token(token: str | None) -> Role:
         return Role.ADMIN
     configured_tokens = {
         Role.ADMIN: settings.admin_token or os.getenv("ADMIN_TOKEN", ""),
-        Role.OPS_ENGINEER: settings.ops_engineer_token or os.getenv("OPS_ENGINEER_TOKEN", ""),
+        Role.OPS_ENGINEER: settings.ops_engineer_token
+        or os.getenv("OPS_ENGINEER_TOKEN", ""),
         Role.VIEWER: settings.viewer_token or os.getenv("VIEWER_TOKEN", ""),
     }
     if not any(configured_tokens.values()):
@@ -44,7 +44,11 @@ def require_role(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
 ) -> Role:
-    token = credentials.credentials if credentials else request.cookies.get("opsweave_session")
+    token = (
+        credentials.credentials
+        if credentials
+        else request.cookies.get("opsweave_session")
+    )
     if token:
         user = user_for_token(token)
         if user:
@@ -56,7 +60,11 @@ def current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
 ) -> tuple[str, Role]:
-    token = credentials.credentials if credentials else request.cookies.get("opsweave_session")
+    token = (
+        credentials.credentials
+        if credentials
+        else request.cookies.get("opsweave_session")
+    )
     user = user_for_token(token)
     if not user:
         raise HTTPException(status_code=401, detail="登录账号后才能访问此资源")
@@ -72,7 +80,11 @@ def require_admin(role: Role = Security(require_role)) -> Role:
 async def websocket_role(websocket: WebSocket) -> Role:
     protocols = websocket.scope.get("subprotocols", [])
     token = next(
-        (protocol.removeprefix("bearer.") for protocol in protocols if protocol.startswith("bearer.")),
+        (
+            protocol.removeprefix("bearer.")
+            for protocol in protocols
+            if protocol.startswith("bearer.")
+        ),
         None,
     )
     if not token:

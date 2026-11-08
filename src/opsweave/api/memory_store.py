@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ..config.database import _get_conn
@@ -18,10 +18,14 @@ def _init_memory() -> None:
             content TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages(username, conversation_id, id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages(username, conversation_id, id)"
+        )
 
 
-def get_history(username: str, conversation_id: str, limit: int = 20) -> list[dict[str, str]]:
+def get_history(
+    username: str, conversation_id: str, limit: int = 20
+) -> list[dict[str, str]]:
     _init_memory()
     with _get_conn() as conn:
         rows = conn.execute(
@@ -36,7 +40,10 @@ def append_turn(username: str, conversation_id: str, query: str, answer: str) ->
     with _get_conn() as conn:
         conn.executemany(
             "INSERT INTO chat_messages (username, conversation_id, role, content) VALUES (?, ?, ?, ?)",
-            [(username, conversation_id, "user", query), (username, conversation_id, "assistant", answer)],
+            [
+                (username, conversation_id, "user", query),
+                (username, conversation_id, "assistant", answer),
+            ],
         )
         conn.execute(
             "DELETE FROM chat_messages WHERE username = ? AND conversation_id = ? AND id NOT IN "
@@ -62,7 +69,7 @@ def append_long_term_memory(username: str, note: str) -> None:
     if not note:
         return
     path = _long_term_path(username)
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     needs_header = not path.exists() or path.stat().st_size == 0
     with path.open("a", encoding="utf-8") as memory_file:
         if needs_header:

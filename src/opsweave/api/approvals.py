@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..config.database import _get_conn
 
@@ -22,13 +22,23 @@ def _init_approvals() -> None:
         )""")
 
 
-def create_approval(username: str, conversation_id: str, server_id: str, tool_name: str, arguments: dict) -> str:
+def create_approval(
+    username: str, conversation_id: str, server_id: str, tool_name: str, arguments: dict
+) -> str:
     _init_approvals()
     approval_id = str(uuid.uuid4())
     with _get_conn() as conn:
         conn.execute(
             "INSERT INTO tool_approvals (id, username, conversation_id, server_id, tool_name, arguments, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
-            (approval_id, username, conversation_id, server_id, tool_name, json.dumps(arguments, ensure_ascii=False), datetime.now(timezone.utc).isoformat()),
+            (
+                approval_id,
+                username,
+                conversation_id,
+                server_id,
+                tool_name,
+                json.dumps(arguments, ensure_ascii=False),
+                datetime.now(UTC).isoformat(),
+            ),
         )
     return approval_id
 
@@ -46,11 +56,19 @@ def list_approvals(username: str, is_admin: bool) -> list[dict]:
     return result
 
 
-def resolve_approval(approval_id: str, username: str, is_admin: bool, approve: bool) -> dict | None:
+def resolve_approval(
+    approval_id: str, username: str, is_admin: bool, approve: bool
+) -> dict | None:
     _init_approvals()
     with _get_conn() as conn:
-        row = conn.execute("SELECT * FROM tool_approvals WHERE id = ?", (approval_id,)).fetchone()
-        if not row or (row["username"] != username and not is_admin) or row["status"] != "pending":
+        row = conn.execute(
+            "SELECT * FROM tool_approvals WHERE id = ?", (approval_id,)
+        ).fetchone()
+        if (
+            not row
+            or (row["username"] != username and not is_admin)
+            or row["status"] != "pending"
+        ):
             return None
         status = "approved" if approve else "rejected"
         updated = conn.execute(
@@ -73,4 +91,7 @@ def resolve_approval(approval_id: str, username: str, is_admin: bool, approve: b
 def finish_approval(approval_id: str, status: str) -> None:
     _init_approvals()
     with _get_conn() as conn:
-        conn.execute("UPDATE tool_approvals SET status = ? WHERE id = ? AND status = 'executing'", (status, approval_id))
+        conn.execute(
+            "UPDATE tool_approvals SET status = ? WHERE id = ? AND status = 'executing'",
+            (status, approval_id),
+        )

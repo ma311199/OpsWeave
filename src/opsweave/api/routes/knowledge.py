@@ -23,7 +23,9 @@ router = APIRouter()
 
 
 class ApplicationRequest(BaseModel):
-    strategy: str = Field(pattern="^(fixed|sentence|paragraph|recursive|sliding|structure|semantic|summary)$")
+    strategy: str = Field(
+        pattern="^(fixed|sentence|paragraph|recursive|sliding|structure|semantic|summary)$"
+    )
     chunk_size: int = Field(ge=1, le=100000)
     overlap: int = Field(ge=0, le=10000)
     semantic_max_chunk_size: int | None = Field(default=None, ge=1, le=100000)
@@ -50,21 +52,38 @@ def _init_knowledge() -> None:
             semantic_max_chunk_size INTEGER NOT NULL DEFAULT 2048, structure_format TEXT NOT NULL DEFAULT 'markdown', semantic_threshold INTEGER NOT NULL DEFAULT 95, chunk_metadata TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""")
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(knowledge_documents)")}
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(knowledge_documents)")
+        }
         if "collection_name" not in columns:
-            conn.execute("ALTER TABLE knowledge_documents ADD COLUMN collection_name TEXT NOT NULL DEFAULT 'opsweave'")
+            conn.execute(
+                "ALTER TABLE knowledge_documents ADD COLUMN collection_name TEXT NOT NULL DEFAULT 'opsweave'"
+            )
         if "chunk_size" not in columns:
-            conn.execute("ALTER TABLE knowledge_documents ADD COLUMN chunk_size INTEGER NOT NULL DEFAULT 512")
+            conn.execute(
+                "ALTER TABLE knowledge_documents ADD COLUMN chunk_size INTEGER NOT NULL DEFAULT 512"
+            )
         if "chunk_overlap" not in columns:
-            conn.execute("ALTER TABLE knowledge_documents ADD COLUMN chunk_overlap INTEGER NOT NULL DEFAULT 64")
+            conn.execute(
+                "ALTER TABLE knowledge_documents ADD COLUMN chunk_overlap INTEGER NOT NULL DEFAULT 64"
+            )
         if "semantic_max_chunk_size" not in columns:
-            conn.execute("ALTER TABLE knowledge_documents ADD COLUMN semantic_max_chunk_size INTEGER NOT NULL DEFAULT 2048")
+            conn.execute(
+                "ALTER TABLE knowledge_documents ADD COLUMN semantic_max_chunk_size INTEGER NOT NULL DEFAULT 2048"
+            )
         if "structure_format" not in columns:
-            conn.execute("ALTER TABLE knowledge_documents ADD COLUMN structure_format TEXT NOT NULL DEFAULT 'markdown'")
+            conn.execute(
+                "ALTER TABLE knowledge_documents ADD COLUMN structure_format TEXT NOT NULL DEFAULT 'markdown'"
+            )
         if "semantic_threshold" not in columns:
-            conn.execute("ALTER TABLE knowledge_documents ADD COLUMN semantic_threshold INTEGER NOT NULL DEFAULT 95")
+            conn.execute(
+                "ALTER TABLE knowledge_documents ADD COLUMN semantic_threshold INTEGER NOT NULL DEFAULT 95"
+            )
         if "chunk_metadata" not in columns:
-            conn.execute("ALTER TABLE knowledge_documents ADD COLUMN chunk_metadata TEXT NOT NULL DEFAULT '{}'")
+            conn.execute(
+                "ALTER TABLE knowledge_documents ADD COLUMN chunk_metadata TEXT NOT NULL DEFAULT '{}'"
+            )
         conn.execute("""CREATE TABLE IF NOT EXISTS knowledge_chunks (
             id TEXT PRIMARY KEY, document_id TEXT NOT NULL, owner TEXT NOT NULL,
             ordinal INTEGER NOT NULL, text TEXT NOT NULL, embedding_text TEXT NOT NULL,
@@ -82,7 +101,9 @@ def _document_row(document_id: str, owner: str, role: Role):
     """读取文档并统一执行所有者隔离；无权访问时按不存在处理。"""
     _init_knowledge()
     with _get_conn() as conn:
-        row = conn.execute("SELECT * FROM knowledge_documents WHERE id = ?", (document_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM knowledge_documents WHERE id = ?", (document_id,)
+        ).fetchone()
     if not row or (role is not Role.ADMIN and row["owner"] != owner):
         raise HTTPException(status_code=404, detail="文档不存在")
     return row
@@ -97,32 +118,52 @@ def list_knowledge_collections(_: tuple[str, Role] = Depends(current_user)) -> d
     _connect_milvus()
     descriptions = json.loads(get_config("milvus_collection_descriptions") or "{}")
     names = utility.list_collections()
-    return {"collections": [{"name": name, "description": descriptions.get(name, ""), "row_count": Collection(name).num_entities} for name in names]}
+    return {
+        "collections": [
+            {
+                "name": name,
+                "description": descriptions.get(name, ""),
+                "row_count": Collection(name).num_entities,
+            }
+            for name in names
+        ]
+    }
 
 
 @router.get("/strategies")
 def strategies(_: tuple[str, Role] = Depends(current_user)) -> dict:
-    return {"strategies": [
-        {"id": "fixed", "name": "固定长度切分"},
-        {"id": "sentence", "name": "句子级切分"},
-        {"id": "paragraph", "name": "段落级切分"},
-        {"id": "recursive", "name": "递归切分"},
-        {"id": "sliding", "name": "滑动窗口切分"},
-        {"id": "structure", "name": "结构化切分"},
-        {"id": "semantic", "name": "语义切分"},
-        {"id": "summary", "name": "摘要切分 (LLM)"},
-    ], "embedding_max_tokens": int(get_config("embedding_max_tokens") or 8192)}
+    return {
+        "strategies": [
+            {"id": "fixed", "name": "固定长度切分"},
+            {"id": "sentence", "name": "句子级切分"},
+            {"id": "paragraph", "name": "段落级切分"},
+            {"id": "recursive", "name": "递归切分"},
+            {"id": "sliding", "name": "滑动窗口切分"},
+            {"id": "structure", "name": "结构化切分"},
+            {"id": "semantic", "name": "语义切分"},
+            {"id": "summary", "name": "摘要切分 (LLM)"},
+        ],
+        "embedding_max_tokens": int(get_config("embedding_max_tokens") or 8192),
+    }
 
 
 @router.post("/upload")
-async def upload_document(collection_name: str, file: UploadFile = File(...), principal: tuple[str, Role] = Depends(current_user)) -> dict:
+async def upload_document(
+    collection_name: str,
+    file: UploadFile = File(...),
+    principal: tuple[str, Role] = Depends(current_user),
+) -> dict:
     owner, _ = principal
     from pymilvus import utility
 
     from .config import _connect_milvus
+
     _connect_milvus()
     if collection_name not in utility.list_collections():
-        raise HTTPException(status_code=400, detail="所选知识库在管理员当前配置的知识库中不存在，请刷新知识库列表")
+        raise HTTPException(
+            status_code=400,
+            detail="所选知识库在管理员当前配置的知识库中不存在，请刷新知识库列表",
+        )
     filename = os.path.basename(file.filename or "document")
     content = await file.read()
     if not content:
@@ -132,9 +173,17 @@ async def upload_document(collection_name: str, file: UploadFile = File(...), pr
     target.write_bytes(content)
     _init_knowledge()
     with _get_conn() as conn:
-        conn.execute("INSERT INTO knowledge_documents (id, owner, filename, path, size, strategy, status, collection_name) VALUES (?, ?, ?, ?, ?, 'token', 'uploaded', ?)",
-                     (document_id, owner, filename, str(target), len(content), collection_name))
-    return {"id": document_id, "filename": filename, "size": len(content), "status": "uploaded", "collection_name": collection_name}
+        conn.execute(
+            "INSERT INTO knowledge_documents (id, owner, filename, path, size, strategy, status, collection_name) VALUES (?, ?, ?, ?, ?, 'token', 'uploaded', ?)",
+            (document_id, owner, filename, str(target), len(content), collection_name),
+        )
+    return {
+        "id": document_id,
+        "filename": filename,
+        "size": len(content),
+        "status": "uploaded",
+        "collection_name": collection_name,
+    }
 
 
 @router.get("/documents")
@@ -143,14 +192,24 @@ def list_documents(principal: tuple[str, Role] = Depends(current_user)) -> dict:
     _init_knowledge()
     with _get_conn() as conn:
         if role is Role.ADMIN:
-            rows = conn.execute("SELECT id, owner, filename, size, strategy, status, reviewer, error, collection_name, chunk_size, chunk_overlap, semantic_max_chunk_size, structure_format, semantic_threshold, created_at FROM knowledge_documents WHERE status != 'uploaded' ORDER BY created_at DESC").fetchall()
+            rows = conn.execute(
+                "SELECT id, owner, filename, size, strategy, status, reviewer, error, collection_name, chunk_size, chunk_overlap, semantic_max_chunk_size, structure_format, semantic_threshold, created_at FROM knowledge_documents WHERE status != 'uploaded' ORDER BY created_at DESC"
+            ).fetchall()
         else:
-            rows = conn.execute("SELECT id, owner, filename, size, strategy, status, reviewer, error, collection_name, chunk_size, chunk_overlap, semantic_max_chunk_size, created_at FROM knowledge_documents WHERE owner = ? ORDER BY created_at DESC", (owner,)).fetchall()
+            rows = conn.execute(
+                "SELECT id, owner, filename, size, strategy, status, reviewer, error, collection_name, chunk_size, chunk_overlap, semantic_max_chunk_size, created_at FROM knowledge_documents WHERE owner = ? ORDER BY created_at DESC",
+                (owner,),
+            ).fetchall()
     return {"documents": [dict(row) for row in rows], "count": len(rows)}
 
 
 @router.post("/documents/{document_id}/apply")
-def apply_index(document_id: str, req: ApplicationRequest, background_tasks: BackgroundTasks, principal: tuple[str, Role] = Depends(current_user)) -> dict:
+def apply_index(
+    document_id: str,
+    req: ApplicationRequest,
+    background_tasks: BackgroundTasks,
+    principal: tuple[str, Role] = Depends(current_user),
+) -> dict:
     """校验文档、collection 与 token 上限后，立即构建或送交管理员审批。"""
     owner, role = principal
     row = _document_row(document_id, owner, role)
@@ -158,26 +217,54 @@ def apply_index(document_id: str, req: ApplicationRequest, background_tasks: Bac
         raise HTTPException(status_code=409, detail="该文档当前状态不能提交申请")
     collection_name = row["collection_name"] or req.collection_name
     if not collection_name:
-        raise HTTPException(status_code=400, detail="该文档未绑定知识库，请刷新知识库列表后重新提交")
+        raise HTTPException(
+            status_code=400, detail="该文档未绑定知识库，请刷新知识库列表后重新提交"
+        )
     from pymilvus import utility
 
     from .config import _connect_milvus
+
     _connect_milvus()
     if collection_name not in utility.list_collections():
-        raise HTTPException(status_code=400, detail="所选知识库已不存在于管理员当前配置的 Milvus 数据库中，请刷新后重新上传")
+        raise HTTPException(
+            status_code=400,
+            detail="所选知识库已不存在于管理员当前配置的 Milvus 数据库中，请刷新后重新上传",
+        )
     max_tokens = int(get_config("embedding_max_tokens") or 8192)
-    requested_max = req.semantic_max_chunk_size if req.strategy == "semantic" else req.chunk_size
+    requested_max = (
+        req.semantic_max_chunk_size if req.strategy == "semantic" else req.chunk_size
+    )
     if requested_max and requested_max > max_tokens:
-        raise HTTPException(status_code=422, detail=f"切分块大小不能超过当前 Embedding 最大输入限制 {max_tokens} tokens")
+        raise HTTPException(
+            status_code=422,
+            detail=f"切分块大小不能超过当前 Embedding 最大输入限制 {max_tokens} tokens",
+        )
     with _get_conn() as conn:
-        conn.execute("UPDATE knowledge_documents SET collection_name = ?, chunk_size = ?, chunk_overlap = ?, semantic_max_chunk_size = ?, structure_format = ?, semantic_threshold = ? WHERE id = ?", (collection_name, req.chunk_size, req.overlap, req.semantic_max_chunk_size or req.chunk_size, req.structure_format, req.semantic_threshold, document_id))
+        conn.execute(
+            "UPDATE knowledge_documents SET collection_name = ?, chunk_size = ?, chunk_overlap = ?, semantic_max_chunk_size = ?, structure_format = ?, semantic_threshold = ? WHERE id = ?",
+            (
+                collection_name,
+                req.chunk_size,
+                req.overlap,
+                req.semantic_max_chunk_size or req.chunk_size,
+                req.structure_format,
+                req.semantic_threshold,
+                document_id,
+            ),
+        )
     if role is Role.ADMIN:
         with _get_conn() as conn:
-            conn.execute("UPDATE knowledge_documents SET strategy = ?, status = 'processing', reviewer = ?, error = NULL WHERE id = ?", (req.strategy, owner, document_id))
+            conn.execute(
+                "UPDATE knowledge_documents SET strategy = ?, status = 'processing', reviewer = ?, error = NULL WHERE id = ?",
+                (req.strategy, owner, document_id),
+            )
         background_tasks.add_task(_build_approved_document, document_id)
         return {"status": "processing", "document_id": document_id}
     with _get_conn() as conn:
-        conn.execute("UPDATE knowledge_documents SET strategy = ?, status = 'pending', reviewer = NULL, error = NULL WHERE id = ?", (req.strategy, document_id))
+        conn.execute(
+            "UPDATE knowledge_documents SET strategy = ?, status = 'pending', reviewer = NULL, error = NULL WHERE id = ?",
+            (req.strategy, document_id),
+        )
     return {"status": "pending", "document_id": document_id}
 
 
@@ -192,13 +279,14 @@ def _process_document(document_id: str) -> None:
     from llama_index.core.schema import TextNode
 
     from ...retrieval.embeddings import OpenAICompatEmbedding
-    from ...retrieval.vector_store import get_milvus_store
 
     with _get_conn() as conn:
-        doc = conn.execute("SELECT * FROM knowledge_documents WHERE id = ?", (document_id,)).fetchone()
+        doc = conn.execute(
+            "SELECT * FROM knowledge_documents WHERE id = ?", (document_id,)
+        ).fetchone()
     loaded = SimpleDirectoryReader(input_files=[doc["path"]]).load_data()
     embedding = OpenAICompatEmbedding.from_settings()
-    strategy = doc["strategy"] or "fixed"  # 
+    strategy = doc["strategy"] or "fixed"
 
     if strategy in {"fixed", "sliding"}:  # 固定切分或滑动切分
         splitter = TokenTextSplitter(
@@ -207,20 +295,31 @@ def _process_document(document_id: str) -> None:
         )
         source_nodes = splitter.get_nodes_from_documents(loaded)
     elif strategy == "sentence":  # 句子切分
-        splitter = SentenceSplitter(chunk_size=doc["chunk_size"], chunk_overlap=doc["chunk_overlap"])
+        splitter = SentenceSplitter(
+            chunk_size=doc["chunk_size"], chunk_overlap=doc["chunk_overlap"]
+        )
         source_nodes = splitter.get_nodes_from_documents(loaded)
-    elif strategy in {"paragraph", "recursive", "structure"}:  # 段落切分、递归切分或结构化切分
+    elif strategy in {
+        "paragraph",
+        "recursive",
+        "structure",
+    }:  # 段落切分、递归切分或结构化切分
         from langchain_text_splitters import RecursiveCharacterTextSplitter
 
         structure_separators = {
             "markdown": [r"\n#{1,6}\s+", r"\n\n", r"\n"],
             "html": [r"</?(?:h[1-6]|p|div|section|article)[^>]*>", r"\n\n", r"\n"],
-            "latex": [r"\\(?:chapter|section|subsection|paragraph)\*?\{", r"\n\n", r"\n"],
+            "latex": [
+                r"\\(?:chapter|section|subsection|paragraph)\*?\{",
+                r"\n\n",
+                r"\n",
+            ],
         }
         separators = {
             "paragraph": [r"\n\n", r"\n", ""],
             "recursive": [r"\n\n", r"\n", "。", "！", "？", r"\.\s+", "! ", "? ", ""],
-            "structure": structure_separators[doc["structure_format"]] + ["。", "！", "？", ""],
+            "structure": structure_separators[doc["structure_format"]]
+            + ["。", "！", "？", ""],
         }[strategy]
         splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
             chunk_size=doc["chunk_size"],
@@ -229,8 +328,10 @@ def _process_document(document_id: str) -> None:
             is_separator_regex=True,
         )
         source_nodes = splitter.create_documents([item.text for item in loaded])
-    elif strategy == "semantic":  # 语义切分    
-        bounded_splitter = SentenceSplitter(chunk_size=doc["semantic_max_chunk_size"], chunk_overlap=0)
+    elif strategy == "semantic":  # 语义切分
+        bounded_splitter = SentenceSplitter(
+            chunk_size=doc["semantic_max_chunk_size"], chunk_overlap=0
+        )
         bounded_nodes = bounded_splitter.get_nodes_from_documents(loaded)
         semantic_parser = SemanticSplitterNodeParser(
             buffer_size=1,
@@ -245,7 +346,9 @@ def _process_document(document_id: str) -> None:
     elif strategy == "summary":  # 摘要切分
         from ...llm.client import get_llm
 
-        base_splitter = SentenceSplitter(chunk_size=doc["chunk_size"], chunk_overlap=doc["chunk_overlap"])
+        base_splitter = SentenceSplitter(
+            chunk_size=doc["chunk_size"], chunk_overlap=doc["chunk_overlap"]
+        )
         source_nodes = base_splitter.get_nodes_from_documents(loaded)
         for source_node in source_nodes:
             prompt = (
@@ -259,7 +362,11 @@ def _process_document(document_id: str) -> None:
 
     logger.info(
         "Document chunking completed: document_id=%s strategy=%s source_documents=%d chunks=%d collection=%s",
-        document_id, strategy, len(loaded), len(source_nodes), doc["collection_name"],
+        document_id,
+        strategy,
+        len(loaded),
+        len(source_nodes),
+        doc["collection_name"],
     )
     chunks: list[dict[str, str]] = []
     vector_nodes = []
@@ -276,16 +383,20 @@ def _process_document(document_id: str) -> None:
             embed_text = raw
         token_count = embedding.count_tokens(embed_text)
         if token_count > max_tokens:
-            raise ValueError(f"第 {ordinal + 1} 个文本块超过 Embedding 模型最大输入限制：{token_count} > {max_tokens} tokens")
+            raise ValueError(
+                f"第 {ordinal + 1} 个文本块超过 Embedding 模型最大输入限制：{token_count} > {max_tokens} tokens"
+            )
         chunk_id = str(uuid.uuid4())
-        chunks.append({
-            "id": chunk_id,
-            "document_id": document_id,
-            "owner": doc["owner"],
-            "ordinal": ordinal,
-            "text": raw,
-            "embedding_text": embed_text,
-        })
+        chunks.append(
+            {
+                "id": chunk_id,
+                "document_id": document_id,
+                "owner": doc["owner"],
+                "ordinal": ordinal,
+                "text": raw,
+                "embedding_text": embed_text,
+            }
+        )
         node = TextNode(
             text=raw,
             id_=chunk_id,
@@ -300,20 +411,31 @@ def _process_document(document_id: str) -> None:
             vector_nodes.append(node)
             logger.debug(
                 "Embedded chunk: document_id=%s ordinal=%d chunk_id=%s text_chars=%d embedding_tokens=%d embedding_dimensions=%d",
-                document_id, ordinal, chunk_id, len(raw), token_count, len(node.embedding),
+                document_id,
+                ordinal,
+                chunk_id,
+                len(raw),
+                token_count,
+                len(node.embedding),
             )
         except Exception as exc:
-            raise RuntimeError(f"Embedding 请求失败（{get_settings().embedding_base_url}）：{exc}") from exc
+            raise RuntimeError(
+                f"Embedding 请求失败（{get_settings().embedding_base_url}）：{exc}"
+            ) from exc
 
     if not vector_nodes:
-        raise RuntimeError(f"切分完成但没有生成可写入的向量节点：策略={strategy}，source_documents={len(loaded)}，chunks={len(source_nodes)}")
+        raise RuntimeError(
+            f"切分完成但没有生成可写入的向量节点：策略={strategy}，source_documents={len(loaded)}，chunks={len(source_nodes)}"
+        )
 
     from pymilvus import MilvusClient
 
     settings = get_settings()
     token = f"{settings.milvus_user}:{settings.milvus_password}"
     try:
-        client = MilvusClient(uri=settings.milvus_uri, token=token, db_name=settings.milvus_database)
+        client = MilvusClient(
+            uri=settings.milvus_uri, token=token, db_name=settings.milvus_database
+        )
         try:
             rows = [
                 {
@@ -330,17 +452,26 @@ def _process_document(document_id: str) -> None:
             returned_ids = insert_result.get("ids", [])
             logger.info(
                 "Milvus insert returned: collection=%s expected=%d returned=%d",
-                doc["collection_name"], len(vector_nodes), len(returned_ids),
+                doc["collection_name"],
+                len(vector_nodes),
+                len(returned_ids),
             )
             client.flush(doc["collection_name"])
             inserted_ids = [node.node_id for node in vector_nodes]
-            inserted_rows = client.get(doc["collection_name"], ids=inserted_ids, output_fields=["id"])
+            inserted_rows = client.get(
+                doc["collection_name"], ids=inserted_ids, output_fields=["id"]
+            )
             verified_ids = {row["id"] for row in inserted_rows}
         finally:
             client.close()
     except Exception as exc:
-        logger.exception("Milvus write or verification failed for collection %s", doc["collection_name"])
-        raise RuntimeError(f"Milvus 写入或核验失败（{settings.milvus_uri}，数据库 {settings.milvus_database}，集合 {doc['collection_name']}）：{exc}") from exc
+        logger.exception(
+            "Milvus write or verification failed for collection %s",
+            doc["collection_name"],
+        )
+        raise RuntimeError(
+            f"Milvus 写入或核验失败（{settings.milvus_uri}，数据库 {settings.milvus_database}，集合 {doc['collection_name']}）：{exc}"
+        ) from exc
     if len(verified_ids) != len(vector_nodes):
         raise RuntimeError(
             f"Milvus 写入核验失败：集合 '{doc['collection_name']}'，切分策略={strategy}，"
@@ -355,11 +486,16 @@ def _process_document(document_id: str) -> None:
             "VALUES (:id, :document_id, :owner, :ordinal, :text, :embedding_text)",
             chunks,
         )
-        conn.execute("UPDATE knowledge_documents SET status = 'completed', error = NULL WHERE id = ?", (document_id,))  # 更新文档状态为已完成
+        conn.execute(
+            "UPDATE knowledge_documents SET status = 'completed', error = NULL WHERE id = ?",
+            (document_id,),
+        )  # 更新文档状态为已完成
 
 
 @router.post("/documents/{document_id}/cancel-application")
-def cancel_application(document_id: str, principal: tuple[str, Role] = Depends(current_user)) -> dict:
+def cancel_application(
+    document_id: str, principal: tuple[str, Role] = Depends(current_user)
+) -> dict:
     owner, role = principal
     if role is Role.ADMIN:
         raise HTTPException(status_code=403, detail="仅申请人可以撤销构建申请")
@@ -382,9 +518,14 @@ def list_applications(principal: tuple[str, Role] = Depends(current_user)) -> di
     _init_knowledge()
     with _get_conn() as conn:
         if role is Role.ADMIN:
-            rows = conn.execute("SELECT * FROM knowledge_documents WHERE status = 'pending' ORDER BY created_at").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM knowledge_documents WHERE status = 'pending' ORDER BY created_at"
+            ).fetchall()
         else:
-            rows = conn.execute("SELECT * FROM knowledge_documents WHERE owner = ? AND status = 'pending' ORDER BY created_at", (owner,)).fetchall()
+            rows = conn.execute(
+                "SELECT * FROM knowledge_documents WHERE owner = ? AND status = 'pending' ORDER BY created_at",
+                (owner,),
+            ).fetchall()
     return {"applications": [dict(row) for row in rows]}
 
 
@@ -398,11 +539,19 @@ def _build_approved_document(document_id: str) -> None:
     except Exception as exc:
         logger.exception("Approved document indexing failed: %s", document_id)
         with _get_conn() as conn:
-            conn.execute("UPDATE knowledge_documents SET status = 'failed', error = ? WHERE id = ?", (str(exc), document_id))
+            conn.execute(
+                "UPDATE knowledge_documents SET status = 'failed', error = ? WHERE id = ?",
+                (str(exc), document_id),
+            )
 
 
 @router.post("/applications/{document_id}/review")
-def review_application(document_id: str, req: ReviewRequest, background_tasks: BackgroundTasks, principal: tuple[str, Role] = Depends(current_user)) -> dict:
+def review_application(
+    document_id: str,
+    req: ReviewRequest,
+    background_tasks: BackgroundTasks,
+    principal: tuple[str, Role] = Depends(current_user),
+) -> dict:
     """管理员拒绝申请或批准后触发同一套文档索引处理流程。"""
     reviewer, role = principal
     if role is not Role.ADMIN:
@@ -412,26 +561,39 @@ def review_application(document_id: str, req: ReviewRequest, background_tasks: B
         raise HTTPException(status_code=409, detail="申请已处理")
     if not req.approve:
         with _get_conn() as conn:
-            conn.execute("UPDATE knowledge_documents SET status = 'rejected', reviewer = ? WHERE id = ?", (reviewer, document_id))
+            conn.execute(
+                "UPDATE knowledge_documents SET status = 'rejected', reviewer = ? WHERE id = ?",
+                (reviewer, document_id),
+            )
         return {"status": "rejected"}
     with _get_conn() as conn:
-        conn.execute("UPDATE knowledge_documents SET status = 'processing', reviewer = ? WHERE id = ?", (reviewer, document_id))
+        conn.execute(
+            "UPDATE knowledge_documents SET status = 'processing', reviewer = ? WHERE id = ?",
+            (reviewer, document_id),
+        )
     background_tasks.add_task(_build_approved_document, document_id)
     return {"status": "processing", "document_id": document_id}
 
 
 @router.get("/documents/{document_id}/chunks")
-def document_chunks(document_id: str, principal: tuple[str, Role] = Depends(current_user)) -> dict:
+def document_chunks(
+    document_id: str, principal: tuple[str, Role] = Depends(current_user)
+) -> dict:
     owner, role = principal
     _document_row(document_id, owner, role)
     _init_knowledge()
     with _get_conn() as conn:
-        rows = conn.execute("SELECT id, document_id, owner AS user_id, ordinal, text, embedding_text FROM knowledge_chunks WHERE document_id = ? ORDER BY ordinal", (document_id,)).fetchall()
+        rows = conn.execute(
+            "SELECT id, document_id, owner AS user_id, ordinal, text, embedding_text FROM knowledge_chunks WHERE document_id = ? ORDER BY ordinal",
+            (document_id,),
+        ).fetchall()
     return {"chunks": [dict(row) for row in rows], "count": len(rows)}
 
 
 @router.delete("/documents/{document_id}")
-def delete_document(document_id: str, principal: tuple[str, Role] = Depends(current_user)) -> dict:
+def delete_document(
+    document_id: str, principal: tuple[str, Role] = Depends(current_user)
+) -> dict:
     owner, role = principal
     row = _document_row(document_id, owner, role)
     if row["status"] in {"pending", "processing"}:
@@ -439,9 +601,12 @@ def delete_document(document_id: str, principal: tuple[str, Role] = Depends(curr
     Path(row["path"]).unlink(missing_ok=True)
     if row["status"] == "completed":
         from ...retrieval.vector_store import get_milvus_store
+
         get_milvus_store(row["collection_name"]).delete(document_id)
     with _get_conn() as conn:
-        conn.execute("DELETE FROM knowledge_chunks WHERE document_id = ?", (document_id,))
+        conn.execute(
+            "DELETE FROM knowledge_chunks WHERE document_id = ?", (document_id,)
+        )
         conn.execute("DELETE FROM knowledge_documents WHERE id = ?", (document_id,))
     return {"status": "ok"}
 
@@ -455,9 +620,14 @@ def get_status(
     _init_knowledge()
     with _get_conn() as conn:
         if role is Role.ADMIN:
-            count = conn.execute("SELECT COUNT(*) AS n FROM knowledge_documents").fetchone()["n"]
+            count = conn.execute(
+                "SELECT COUNT(*) AS n FROM knowledge_documents"
+            ).fetchone()["n"]
         else:
-            count = conn.execute("SELECT COUNT(*) AS n FROM knowledge_documents WHERE owner = ?", (owner,)).fetchone()["n"]
+            count = conn.execute(
+                "SELECT COUNT(*) AS n FROM knowledge_documents WHERE owner = ?",
+                (owner,),
+            ).fetchone()["n"]
 
     try:
         from pymilvus import Collection, DataType, utility
@@ -466,7 +636,9 @@ def get_status(
 
         _connect_milvus()
         collections = utility.list_collections()
-        expected_dimension = int(get_config("embedding_dimension") or get_settings().embedding_dimension)
+        expected_dimension = int(
+            get_config("embedding_dimension") or get_settings().embedding_dimension
+        )
         expected_fields = {
             "id": DataType.VARCHAR,
             "document_id": DataType.VARCHAR,
@@ -482,7 +654,9 @@ def get_status(
         for candidate in candidates:
             if candidate not in collections:
                 continue
-            fields = {field.name: field for field in Collection(candidate).schema.fields}
+            fields = {
+                field.name: field for field in Collection(candidate).schema.fields
+            }
             candidate_errors = []
             for name, expected_type in expected_fields.items():
                 if name not in fields:
@@ -496,7 +670,9 @@ def get_status(
             vector_field = fields.get("vector")
             candidate_dimension = None
             if vector_field is not None:
-                candidate_dimension = (getattr(vector_field, "params", None) or {}).get("dim")
+                candidate_dimension = (getattr(vector_field, "params", None) or {}).get(
+                    "dim"
+                )
                 if candidate_dimension != expected_dimension:
                     candidate_errors.append(
                         f"向量维度不匹配：collection={candidate_dimension}，配置={expected_dimension}"
@@ -534,7 +710,9 @@ def get_status(
             "schema_valid": False,
             "schema_errors": [],
             "vector_dimension": None,
-            "expected_vector_dimension": int(get_config("embedding_dimension") or get_settings().embedding_dimension),
+            "expected_vector_dimension": int(
+                get_config("embedding_dimension") or get_settings().embedding_dimension
+            ),
             "collections": [],
             "document_count": count,
             "error": str(exc),

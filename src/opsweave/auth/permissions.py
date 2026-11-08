@@ -80,9 +80,7 @@ class PermissionChecker:
                 return rule.allowed
         return False  # deny by default
 
-    def require(
-        self, role: Role, resource: ResourceType, **context: Any
-    ) -> None:
+    def require(self, role: Role, resource: ResourceType, **context: Any) -> None:
         """Raise PermissionError if access is denied."""
         if not self.is_allowed(role, resource):
             raise PermissionError(
