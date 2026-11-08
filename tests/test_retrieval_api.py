@@ -1,3 +1,5 @@
+from fastapi import HTTPException
+
 from opsweave.api.routes import retrieval
 
 
@@ -30,5 +32,8 @@ def test_search_passes_authenticated_user_to_retriever(client, monkeypatch, mock
 
 
 def test_direct_index_build_requires_admin(client):
+    client.app.dependency_overrides[retrieval.require_admin] = lambda: (
+        _ for _ in ()
+    ).throw(HTTPException(status_code=403))
     response = client.post("/api/retrieval/build")
     assert response.status_code == 403

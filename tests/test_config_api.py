@@ -50,5 +50,3 @@ def test_config_updates_secrets_in_environment_and_nonsecret_values_in_sqlite(
     stored = database.get_all_configs()
     assert stored["llm_model"] == "test-model"
     assert not {"llm_api_key", "embedding_api_key", "milvus_password"} & stored.keys()
-
-

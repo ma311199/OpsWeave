@@ -20,10 +20,17 @@ def test_approval_is_visible_to_requester_and_admin(client):
 def test_approval_rest_api_executes_approved_tool(client, monkeypatch):
     from opsweave.api.routes import approvals as approval_routes
 
-    client.app.dependency_overrides[approval_routes.current_user] = lambda: ("alice", Role.VIEWER)
+    client.app.dependency_overrides[approval_routes.current_user] = lambda: (
+        "alice",
+        Role.VIEWER,
+    )
     monkeypatch.setattr(approval_routes, "call_tool", lambda *args: {"ok": True})
-    approval_id = create_approval("alice", "conv-1", "remote", "restart", {"service": "api"})
-    response = client.post(f"/api/approvals/{approval_id}/decision", json={"approve": True})
+    approval_id = create_approval(
+        "alice", "conv-1", "remote", "restart", {"service": "api"}
+    )
+    response = client.post(
+        f"/api/approvals/{approval_id}/decision", json={"approve": True}
+    )
     assert response.status_code == 200
     assert response.json()["status"] == "completed"
     assert response.json()["result"] == {"ok": True}
