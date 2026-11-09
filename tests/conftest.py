@@ -22,7 +22,24 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(knowledge, "_get_conn", get_conn)
     monkeypatch.setattr("opsweave.config.database._get_conn", get_conn)
     from opsweave.api import approvals, memory_store
+    from opsweave.api.routes import conversations
 
+    monkeypatch.setattr(
+        conversations, "create_conversation", memory_store.create_conversation
+    )
+    monkeypatch.setattr(
+        conversations, "conversation_exists", memory_store.conversation_exists
+    )
+    monkeypatch.setattr(
+        conversations, "delete_conversation", memory_store.delete_conversation
+    )
+    monkeypatch.setattr(conversations, "get_history", memory_store.get_history)
+    monkeypatch.setattr(
+        conversations, "list_conversations", memory_store.list_conversations
+    )
+    monkeypatch.setattr(
+        conversations, "rename_conversation", memory_store.rename_conversation
+    )
     monkeypatch.setattr(approvals, "_get_conn", get_conn)
     monkeypatch.setattr(memory_store, "_get_conn", get_conn)
 

@@ -96,9 +96,7 @@ def user_for_token(token: str | None) -> tuple[str, str] | None:
             "SELECT users.username, users.role, sessions.expires_at FROM sessions JOIN users USING (username) WHERE sessions.token_hash = ?",
             (token_hash,),
         ).fetchone()
-    if not row or datetime.fromisoformat(row["expires_at"]) <= datetime.now(
-        UTC
-    ):
+    if not row or datetime.fromisoformat(row["expires_at"]) <= datetime.now(UTC):
         return None
     return row["username"], row["role"]
 
