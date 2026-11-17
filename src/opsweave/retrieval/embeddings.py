@@ -241,9 +241,7 @@ class OpenAICompatEmbedding(BaseEmbedding):
     endpoint_url: str | None = Field(
         default=None, description="Probed full request URL"
     )
-    protocol: str = Field(
-        default="openai", description="openai | multimodal | chat"
-    )
+    protocol: str = Field(default="openai", description="openai | multimodal | chat")
     supports_batch: bool = Field(
         default=True, description="Whether the service accepts batch inputs"
     )
