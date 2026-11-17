@@ -13,6 +13,12 @@ from pydantic import BaseModel, Field, field_validator
 from ...agents.retrieval_pipeline import clear_retrieval_index_cache
 from ...config.database import get_all_configs, get_config, set_config, update_configs
 from ...config.settings import get_settings
+from ...retrieval.embeddings import (
+    PROTOCOL_LABELS,
+    EmbeddingProbeError,
+    adetect_embedding_endpoint,
+    clear_embedding_endpoint_cache,
+)
 from ..auth import require_admin
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -44,6 +50,9 @@ class ConfigUpdate(BaseModel):
     embedding_model: str | None = None
     embedding_dimension: int | None = None
     embedding_max_tokens: int | None = Field(default=None, ge=1, le=1000000)
+    reranker_base_url: str | None = None
+    reranker_api_key: str | None = None
+    reranker_model: str | None = None
     milvus_uri: str | None = None
     milvus_user: str | None = None
     milvus_password: str | None = None
@@ -89,7 +98,7 @@ def get_configs() -> dict:
     db_configs = get_all_configs()
     settings = get_settings()
 
-    result = {"llm": {}, "embedding": {}, "milvus": {}, "agent": {}}
+    result = {"llm": {}, "embedding": {}, "reranker": {}, "milvus": {}, "agent": {}}
 
     # LLM
     result["llm"]["base_url"] = db_configs.get("llm_base_url", settings.llm_base_url)
@@ -114,6 +123,15 @@ def get_configs() -> dict:
         db_configs.get("embedding_max_tokens", 8192)
     )
 
+    # Reranker
+    result["reranker"]["base_url"] = db_configs.get(
+        "reranker_base_url", settings.reranker_base_url
+    )
+    result["reranker"]["api_key"] = _mask_key(settings.reranker_api_key)
+    result["reranker"]["model"] = db_configs.get(
+        "reranker_model", settings.reranker_model
+    )
+
     # Milvus
     result["milvus"]["uri"] = db_configs.get("milvus_uri", settings.milvus_uri)
     result["milvus"]["user"] = db_configs.get("milvus_user", settings.milvus_user)
@@ -124,8 +142,6 @@ def get_configs() -> dict:
     # Parse collections JSON
     collections_str = db_configs.get("milvus_collections", "[]")
     try:
-        import json
-
         result["milvus"]["collections"] = json.loads(collections_str)
     except (json.JSONDecodeError, TypeError):
         result["milvus"]["collections"] = []
@@ -182,6 +198,19 @@ def update_configs_endpoint(req: ConfigUpdate) -> dict:
     if req.embedding_max_tokens is not None:
         updates["embedding_max_tokens"] = req.embedding_max_tokens
 
+    # Reranker
+    if req.reranker_base_url is not None:
+        updates["reranker_base_url"] = req.reranker_base_url
+    if (
+        req.reranker_api_key is not None
+        and req.reranker_api_key != "..."
+        and not req.reranker_api_key.startswith("...")
+    ):
+        os.environ["RERANKER_API_KEY"] = req.reranker_api_key
+        get_settings.cache_clear()
+    if req.reranker_model is not None:
+        updates["reranker_model"] = req.reranker_model
+
     # Milvus
     if req.milvus_uri is not None:
         updates["milvus_uri"] = req.milvus_uri
@@ -197,8 +226,6 @@ def update_configs_endpoint(req: ConfigUpdate) -> dict:
     if req.milvus_database is not None:
         updates["milvus_database"] = req.milvus_database
     if req.milvus_collections is not None:
-        import json
-
         updates["milvus_collections"] = json.dumps(
             req.milvus_collections, ensure_ascii=False
         )
@@ -225,6 +252,7 @@ def update_configs_endpoint(req: ConfigUpdate) -> dict:
     # Milvus/Embedding 配置变化会使已缓存的直连检索索引失效，需清空重建
     if any(key.startswith(("milvus_", "embedding_")) for key in updates):
         clear_retrieval_index_cache()
+        clear_embedding_endpoint_cache()
 
     return {"status": "ok", "message": "配置已保存"}
 
@@ -282,6 +310,8 @@ async def test_connection(service: str) -> dict:
         return await _test_llm()
     elif service == "embedding":
         return await _test_embedding()
+    elif service == "reranker":
+        return await _test_reranker()
     elif service == "milvus":
         return await _test_milvus()
     else:
@@ -342,24 +372,23 @@ async def _test_llm() -> dict:
 
 
 async def _test_embedding() -> dict:
-    """Test embedding connection with a simple embedding request."""
+    """Test embedding connection, auto-detecting the API protocol.
+
+    Probes standard /embeddings, multimodal /embeddings, and
+    /chat/completions in order; the first working protocol wins and the
+    result is cached for subsequent business calls.
+    """
     settings = get_settings()
-    client = None
     try:
-        client = httpx.AsyncClient(timeout=30.0)
-        resp = await client.post(
-            f"{settings.embedding_base_url}/embeddings",
-            headers={
-                "Authorization": f"Bearer {settings.embedding_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": settings.embedding_model,
-                "input": ["test"],
-            },
+        info = await adetect_embedding_endpoint(
+            base_url=settings.embedding_base_url,
+            api_key=settings.embedding_api_key,
+            model=settings.embedding_model,
+            dimension=settings.embedding_dimension,
+            force=True,  # 测试连接时强制重新探测，绕过缓存
         )
-        resp.raise_for_status()
-        return {"status": "ok", "message": "Embedding 连接正常"}
+    except EmbeddingProbeError as e:
+        return {"status": "error", "message": str(e)}
     except httpx.ConnectError:
         return {
             "status": "error",
@@ -367,30 +396,83 @@ async def _test_embedding() -> dict:
         }
     except httpx.TimeoutException:
         return {"status": "error", "message": "Embedding 服务响应超时"}
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 401:
-            return {"status": "error", "message": "API Key 无效或未授权"}
-        elif e.response.status_code == 404:
-            return {
-                "status": "error",
-                "message": f"模型 '{settings.embedding_model}' 不存在或接口路径错误",
-            }
-        else:
-            return {
-                "status": "error",
-                "message": f"Embedding 服务返回错误 (HTTP {e.response.status_code})",
-            }
     except Exception as e:
-        msg = str(e).lower()
-        if "api key" in msg or "unauthorized" in msg:
-            return {"status": "error", "message": "API Key 无效"}
-        elif "model" in msg or "not found" in msg:
-            return {
-                "status": "error",
-                "message": f"模型 '{settings.embedding_model}' 不存在",
-            }
-        else:
-            return {"status": "error", "message": f"Embedding 连接失败: {str(e)[:100]}"}
+        return {"status": "error", "message": f"Embedding 连接失败: {str(e)[:100]}"}
+
+    label = PROTOCOL_LABELS.get(info.protocol, info.protocol)
+    batch_note = "" if info.supports_batch else "，已自动切换为逐条嵌入"
+    return {
+        "status": "ok",
+        "message": f"Embedding 连接正常（{label}，{info.dimension} 维{batch_note}）",
+    }
+
+
+async def _test_reranker() -> dict:
+    """Test reranker connection, auto-detecting the API protocol.
+
+    Tries Jina-style POST /rerank first; falls back to the texts-style
+    POST /chat/completions endpoint when the former is not found (404).
+    """
+    settings = get_settings()
+    base_url = settings.reranker_base_url.rstrip("/")
+    attempts = [
+        (
+            f"{base_url}/rerank",
+            {
+                "model": settings.reranker_model,
+                "query": "连接测试",
+                "documents": ["这是一条用于测试重排序服务的文本。"],
+                "top_n": 1,
+            },
+        ),
+        (
+            f"{base_url}/chat/completions",
+            {
+                "model": settings.reranker_model,
+                "query": "连接测试",
+                "texts": ["这是一条用于测试重排序服务的文本。"],
+                "top_n": 1,
+                "parameters": {"raw_scores": True},
+            },
+        ),
+    ]
+
+    client = None
+    try:
+        client = httpx.AsyncClient(timeout=30.0)
+        for url, payload in attempts:
+            resp = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {settings.reranker_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            if resp.status_code == 404:
+                continue  # endpoint not found, try the other protocol
+            if resp.status_code == 401:
+                return {"status": "error", "message": "API Key 无效或未授权"}
+            resp.raise_for_status()
+            return {"status": "ok", "message": "Reranker 连接正常"}
+        return {
+            "status": "error",
+            "message": "无法识别 Reranker 接口类型：/rerank 与 /chat/completions 均不存在，请检查 Base URL",
+        }
+    except httpx.ConnectError:
+        return {
+            "status": "error",
+            "message": "无法连接到 Reranker 服务，请检查网络或 Base URL",
+        }
+    except httpx.TimeoutException:
+        return {"status": "error", "message": "Reranker 服务响应超时"}
+    except httpx.HTTPStatusError as e:
+        return {
+            "status": "error",
+            "message": f"Reranker 服务返回错误 (HTTP {e.response.status_code})",
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Reranker 连接失败: {str(e)[:100]}"}
     finally:
         if client:
             await client.aclose()

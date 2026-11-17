@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     embedding_model: str = "qwen3-vl-embedding"
     embedding_dimension: int = 2048
 
+    # Reranker (auto-detects Jina-style /rerank or Sinopec-style
+    # /chat/completions endpoint at request time)
+    reranker_base_url: str = "https://api.siliconflow.cn/v1"
+    reranker_api_key: str = ""
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+
     # Agent
     agent_max_iterations: int = 8
 
@@ -76,7 +82,7 @@ def get_settings() -> Settings:
     settings = Settings()
     overrides = _load_sqlite_overrides()
     for key, value in overrides.items():
-        if key in {"llm_api_key", "embedding_api_key", "milvus_password"}:
+        if key in {"llm_api_key", "embedding_api_key", "milvus_password", "reranker_api_key"}:
             continue
         if hasattr(settings, key):
             attr = getattr(settings, key)
