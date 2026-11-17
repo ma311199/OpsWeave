@@ -104,7 +104,7 @@
 | PUT | `/api/config/milvus/collections/{name}` | 更新 collection 描述 |
 | DELETE | `/api/config/milvus/collections/{name}` | 删除 collection |
 
-配置读写涵盖 LLM、Embedding、Milvus、Agent 及 collection 定义。详细请求字段以 FastAPI OpenAPI schema 为准。
+配置读写涵盖 LLM、Embedding、Reranker、Milvus、Agent 及 collection 定义。Embedding 接口协议由后端自动探测：优先请求 `POST {embedding_base_url}/embeddings`（标准 OpenAI 格式，`input` 为纯文本数组），失败则尝试多模态格式（`input` 为 `{"text": ...}` 对象数组，附 `parameters.dimension` / `parameters.enable_fusion`，如 qwen3-vl-embedding），仍不可用则回退 `POST {embedding_base_url}/chat/completions`（`input` 为纯文本数组）。探测时发送两条测试文本并按返回向量条数校准批量语义，服务不支持批量时自动降级为逐条嵌入；探测结果按 `(base_url, model, dimension)` 进程内缓存，入库与检索共用，测试连接及配置变更时强制重新探测。Reranker 接口协议由后端自动探测：优先请求 `POST {reranker_base_url}/rerank`（Jina 风格，`documents` 字段），若端点返回 404 则回退到 `POST {reranker_base_url}/chat/completions`（`texts` 字段 + `parameters.raw_scores`），用户无需手动选择协议。字段 `reranker_base_url` / `reranker_model` 持久化，`reranker_api_key` 仅环境变量，供直连检索管道的重排节点接入使用。详细请求字段以 FastAPI OpenAPI schema 为准。
 
 ## 8. MCP 工具
 

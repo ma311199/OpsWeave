@@ -29,6 +29,9 @@ CONFIG_MAP: dict[str, tuple[str, str]] = {
     "embedding_model": ("embedding_model", "embedding"),
     "embedding_dimension": ("embedding_dimension", "embedding"),
     "embedding_max_tokens": ("embedding_max_tokens", "embedding"),
+    # Reranker
+    "reranker_base_url": ("reranker_base_url", "reranker"),
+    "reranker_model": ("reranker_model", "reranker"),
     # Milvus
     "milvus_uri": ("milvus_uri", "milvus"),
     "milvus_user": ("milvus_user", "milvus"),
@@ -58,8 +61,14 @@ def init_db() -> None:
     with _get_conn() as conn:
         conn.execute(_TABLE_DDL)
         conn.execute(
-            "DELETE FROM configs WHERE key IN (?, ?, ?)",
-            ("llm_api_key", "embedding_api_key", "milvus_password"),
+            "DELETE FROM configs WHERE key IN (?, ?, ?, ?, ?)",
+            (
+                "llm_api_key",
+                "embedding_api_key",
+                "milvus_password",
+                "reranker_api_key",
+                "reranker_api_type",
+            ),
         )
         conn.commit()
 
