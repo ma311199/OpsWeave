@@ -29,6 +29,7 @@ CONFIG_MAP: dict[str, tuple[str, str]] = {
     "embedding_model": ("embedding_model", "embedding"),
     "embedding_dimension": ("embedding_dimension", "embedding"),
     "embedding_max_tokens": ("embedding_max_tokens", "embedding"),
+    "embedding_tokenizer_path": ("embedding_tokenizer_path", "embedding"),
     # Reranker
     "reranker_base_url": ("reranker_base_url", "reranker"),
     "reranker_model": ("reranker_model", "reranker"),
@@ -40,6 +41,8 @@ CONFIG_MAP: dict[str, tuple[str, str]] = {
     # Agent and MCP
     "agent_max_iterations": ("agent_max_iterations", "agent"),
     "mcp_servers": ("mcp_servers", "mcp"),
+    # Network (applies to all model services)
+    "verify_ssl": ("verify_ssl", "general"),
 }
 
 

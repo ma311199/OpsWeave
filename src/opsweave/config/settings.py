@@ -41,12 +41,19 @@ class Settings(BaseSettings):
     embedding_api_key: str = ""
     embedding_model: str = "qwen3-vl-embedding"
     embedding_dimension: int = 2048
+    # 本地分词器文件路径（tokenizer.json 或其所在目录）。留空则用 cl100k_base 近似
+    embedding_tokenizer_path: str = ""
 
     # Reranker (auto-detects Jina-style /rerank or Sinopec-style
     # /chat/completions endpoint at request time)
     reranker_base_url: str = "https://api.siliconflow.cn/v1"
     reranker_api_key: str = ""
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
+
+    # Skip TLS certificate verification for model services (LLM/Embedding/
+    # Reranker). Enable only for internal CAs, equivalent to `curl -k`.
+    # Safer alternative: trust the corporate CA via SSL_CERT_FILE env var.
+    verify_ssl: bool = True
 
     # Agent
     agent_max_iterations: int = 8
@@ -91,7 +98,12 @@ def get_settings() -> Settings:
             continue
         if hasattr(settings, key):
             attr = getattr(settings, key)
-            if isinstance(attr, float):
+            if isinstance(attr, bool):
+                # bool 是 int 的子类，必须放在 int 分支之前
+                setattr(
+                    settings, key, value.strip().lower() in {"1", "true", "yes", "on"}
+                )
+            elif isinstance(attr, float):
                 setattr(settings, key, float(value))
             elif isinstance(attr, int):
                 setattr(settings, key, int(value))

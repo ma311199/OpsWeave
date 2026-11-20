@@ -24,7 +24,7 @@
         <el-table-column prop="collection_name" label="知识库" width="160" />
         <el-table-column label="大小" width="100"><template #default="{ row }">{{ formatSize(row.size) }}</template></el-table-column>
         <el-table-column label="文档切分" width="180"><template #default="{ row }">
-          <el-button v-if="!isAdmin && ['uploaded','rejected','failed'].includes(row.status)" link type="primary" @click="openChunkConfig(row)">配置切分策略</el-button>
+          <el-button v-if="['uploaded','rejected','failed'].includes(row.status)" link type="primary" @click="openChunkConfig(row)">配置切分策略</el-button>
           <span v-else-if="row.status !== 'uploaded'">{{ strategyName(row.strategy) }} · {{ row.strategy === 'semantic' ? `预切分上限 ${row.semantic_max_chunk_size}` : `${row.chunk_size} / ${row.chunk_overlap} tokens` }}</span>
           <span v-else>—</span>
         </template></el-table-column>

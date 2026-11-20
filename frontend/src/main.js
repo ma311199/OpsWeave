@@ -3,7 +3,7 @@ import axios from 'axios'
 import {
   ElAlert, ElButton, ElCard, ElCheckbox, ElDialog, ElDivider, ElEmpty, ElForm,
   ElFormItem, ElIcon, ElInput, ElInputNumber, ElOption, ElSelect, ElSlider,
-  ElTable, ElTableColumn, ElTabs, ElTabPane, ElTag, ElUpload,
+  ElSwitch, ElTable, ElTableColumn, ElTabs, ElTabPane, ElTag, ElUpload,
 } from 'element-plus'
 import 'element-plus/dist/index.css'
 import { Loading } from '@element-plus/icons-vue'
@@ -19,7 +19,7 @@ app.component('Loading', Loading)
 for (const component of [
   ElAlert, ElButton, ElCard, ElCheckbox, ElDialog, ElDivider, ElEmpty, ElForm,
   ElFormItem, ElIcon, ElInput, ElInputNumber, ElOption, ElSelect, ElSlider,
-  ElTable, ElTableColumn, ElTabs, ElTabPane, ElTag, ElUpload,
+  ElSwitch, ElTable, ElTableColumn, ElTabs, ElTabPane, ElTag, ElUpload,
 ]) {
   app.component(component.name, component)
 }
