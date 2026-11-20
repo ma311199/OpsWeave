@@ -100,7 +100,7 @@ async function submitAuth() {
       await loadUser()
     }
     form.password = ''
-    formRef.value.clearValidate()
+    formRef.value?.clearValidate()
   } catch (error) {
     ElMessage.error(extractErrorMessage(error))
   } finally { busy.value = false }

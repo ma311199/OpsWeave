@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, model_validator
 from ...auth.permissions import Role
 from ...config.database import get_config
 from ...config.settings import get_settings
+from ...retrieval.tokenization import get_token_counter, get_tokenizer
 from ..auth import current_user
 from ..user_store import _get_conn
 
@@ -193,7 +194,7 @@ def list_documents(principal: tuple[str, Role] = Depends(current_user)) -> dict:
     with _get_conn() as conn:
         if role is Role.ADMIN:
             rows = conn.execute(
-                "SELECT id, owner, filename, size, strategy, status, reviewer, error, collection_name, chunk_size, chunk_overlap, semantic_max_chunk_size, structure_format, semantic_threshold, created_at FROM knowledge_documents WHERE status != 'uploaded' ORDER BY created_at DESC"
+                "SELECT id, owner, filename, size, strategy, status, reviewer, error, collection_name, chunk_size, chunk_overlap, semantic_max_chunk_size, structure_format, semantic_threshold, created_at FROM knowledge_documents ORDER BY created_at DESC"
             ).fetchall()
         else:
             rows = conn.execute(
@@ -286,17 +287,23 @@ def _process_document(document_id: str) -> None:
         ).fetchone()
     loaded = SimpleDirectoryReader(input_files=[doc["path"]]).load_data()
     embedding = OpenAICompatEmbedding.from_settings()
+    # LlamaIndex 切分器需要返回 token 列表的分词器；langchain 与上限校验用计数函数
+    tokenizer = get_tokenizer()
+    count_tokens = get_token_counter()
     strategy = doc["strategy"] or "fixed"
 
     if strategy in {"fixed", "sliding"}:  # 固定切分或滑动切分
         splitter = TokenTextSplitter(
             chunk_size=doc["chunk_size"],
             chunk_overlap=doc["chunk_overlap"] if strategy == "sliding" else 0,
+            tokenizer=tokenizer,
         )
         source_nodes = splitter.get_nodes_from_documents(loaded)
     elif strategy == "sentence":  # 句子切分
         splitter = SentenceSplitter(
-            chunk_size=doc["chunk_size"], chunk_overlap=doc["chunk_overlap"]
+            chunk_size=doc["chunk_size"],
+            chunk_overlap=doc["chunk_overlap"],
+            tokenizer=tokenizer,
         )
         source_nodes = splitter.get_nodes_from_documents(loaded)
     elif strategy in {
@@ -305,6 +312,7 @@ def _process_document(document_id: str) -> None:
         "structure",
     }:  # 段落切分、递归切分或结构化切分
         from langchain_text_splitters import RecursiveCharacterTextSplitter
+        from llama_index.core.schema import Document as LIDocument
 
         structure_separators = {
             "markdown": [r"\n#{1,6}\s+", r"\n\n", r"\n"],
@@ -321,16 +329,24 @@ def _process_document(document_id: str) -> None:
             "structure": structure_separators[doc["structure_format"]]
             + ["。", "！", "？", ""],
         }[strategy]
-        splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        splitter = RecursiveCharacterTextSplitter(
             chunk_size=doc["chunk_size"],
             chunk_overlap=doc["chunk_overlap"],
             separators=separators,
             is_separator_regex=True,
+            length_function=count_tokens,
         )
-        source_nodes = splitter.create_documents([item.text for item in loaded])
+        # langchain 切分器返回 langchain Document（只有 page_content），
+        # 统一转换为 LlamaIndex Document，后续按节点统一处理
+        source_nodes = [
+            LIDocument(text=chunk.page_content)
+            for chunk in splitter.create_documents([item.text for item in loaded])
+        ]
     elif strategy == "semantic":  # 语义切分
         bounded_splitter = SentenceSplitter(
-            chunk_size=doc["semantic_max_chunk_size"], chunk_overlap=0
+            chunk_size=doc["semantic_max_chunk_size"],
+            chunk_overlap=0,
+            tokenizer=tokenizer,
         )
         bounded_nodes = bounded_splitter.get_nodes_from_documents(loaded)
         semantic_parser = SemanticSplitterNodeParser(
@@ -347,7 +363,9 @@ def _process_document(document_id: str) -> None:
         from ...llm.client import get_llm
 
         base_splitter = SentenceSplitter(
-            chunk_size=doc["chunk_size"], chunk_overlap=doc["chunk_overlap"]
+            chunk_size=doc["chunk_size"],
+            chunk_overlap=doc["chunk_overlap"],
+            tokenizer=tokenizer,
         )
         source_nodes = base_splitter.get_nodes_from_documents(loaded)
         for source_node in source_nodes:
@@ -372,7 +390,12 @@ def _process_document(document_id: str) -> None:
     vector_nodes = []
     max_tokens = int(get_config("embedding_max_tokens") or 8192)  # 最大输入 token 数
     for ordinal, source in enumerate(source_nodes):  # 遍历所有文本块
-        raw = source.get_content()
+        # Document 只有 .text，Node 才有 get_content()，需兼容两种对象
+        raw = (
+            source.get_content()
+            if callable(getattr(source, "get_content", None))
+            else source.text
+        )
         if strategy == "summary":  # 摘要切分
             keywords = source.metadata.get("keywords", [])
             embed_text = (
@@ -448,6 +471,11 @@ def _process_document(document_id: str) -> None:
                 }
                 for node in vector_nodes
             ]
+            # 幂等重建：先删除该文档的旧向量，避免失败重试产生重复数据
+            client.delete(
+                doc["collection_name"],
+                filter=f'document_id == "{document_id}"',
+            )
             insert_result = client.insert(doc["collection_name"], rows)
             returned_ids = insert_result.get("ids", [])
             logger.info(
@@ -457,6 +485,8 @@ def _process_document(document_id: str) -> None:
                 len(returned_ids),
             )
             client.flush(doc["collection_name"])
+            # 新建集合默认未加载，query/get 前必须先 load，否则报 collection not loaded
+            client.load_collection(doc["collection_name"])
             inserted_ids = [node.node_id for node in vector_nodes]
             inserted_rows = client.get(
                 doc["collection_name"], ids=inserted_ids, output_fields=["id"]
@@ -481,6 +511,9 @@ def _process_document(document_id: str) -> None:
             f"未找到 IDs={sorted(set(inserted_ids) - verified_ids)}"
         )
     with _get_conn() as conn:  # 连接数据库
+        conn.execute(
+            "DELETE FROM knowledge_chunks WHERE document_id = ?", (document_id,)
+        )
         conn.executemany(  # 批量插入文本块
             "INSERT INTO knowledge_chunks (id, document_id, owner, ordinal, text, embedding_text) "
             "VALUES (:id, :document_id, :owner, :ordinal, :text, :embedding_text)",

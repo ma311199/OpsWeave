@@ -15,9 +15,16 @@ from ...config.database import get_all_configs, get_config, set_config, update_c
 from ...config.settings import get_settings
 from ...retrieval.embeddings import (
     PROTOCOL_LABELS,
+    TOKENIZER_PROBE_SAMPLE,
     EmbeddingProbeError,
     adetect_embedding_endpoint,
+    aprobe_remote_tokenizer,
     clear_embedding_endpoint_cache,
+)
+from ...retrieval.tokenization import (
+    clear_tokenizer_cache,
+    get_token_counter,
+    validate_tokenizer_path,
 )
 from ..auth import require_admin
 
@@ -38,6 +45,16 @@ def _unmask_key(value: str, current: str) -> str:
     return value
 
 
+def _submitted_key(value: str | None) -> str | None:
+    """Return a usable API key, or None when the submitted value is masked/blank."""
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned or cleaned.startswith("..."):
+        return None
+    return cleaned
+
+
 class ConfigUpdate(BaseModel):
     """Request body for updating configs."""
 
@@ -50,6 +67,7 @@ class ConfigUpdate(BaseModel):
     embedding_model: str | None = None
     embedding_dimension: int | None = None
     embedding_max_tokens: int | None = Field(default=None, ge=1, le=1000000)
+    embedding_tokenizer_path: str | None = None
     reranker_base_url: str | None = None
     reranker_api_key: str | None = None
     reranker_model: str | None = None
@@ -59,6 +77,8 @@ class ConfigUpdate(BaseModel):
     milvus_database: str | None = None
     agent_max_iterations: int | None = None
     mcp_servers: list[dict] | None = None
+    # Skip TLS verification for model services (internal CA endpoints)
+    verify_ssl: bool | None = None
     # Milvus collections (JSON list)
     milvus_collections: list[dict] | None = None
 
@@ -100,6 +120,9 @@ def get_configs() -> dict:
 
     result = {"llm": {}, "embedding": {}, "reranker": {}, "milvus": {}, "agent": {}}
 
+    # Network (applies to all model services)
+    result["network"] = {"verify_ssl": settings.verify_ssl}
+
     # LLM
     result["llm"]["base_url"] = db_configs.get("llm_base_url", settings.llm_base_url)
     result["llm"]["api_key"] = _mask_key(settings.llm_api_key)
@@ -121,6 +144,9 @@ def get_configs() -> dict:
     )
     result["embedding"]["max_tokens"] = int(
         db_configs.get("embedding_max_tokens", 8192)
+    )
+    result["embedding"]["tokenizer_path"] = db_configs.get(
+        "embedding_tokenizer_path", settings.embedding_tokenizer_path
     )
 
     # Reranker
@@ -169,12 +195,9 @@ def update_configs_endpoint(req: ConfigUpdate) -> dict:
     # LLM
     if req.llm_base_url is not None:
         updates["llm_base_url"] = req.llm_base_url
-    if (
-        req.llm_api_key is not None
-        and req.llm_api_key != "..."
-        and not req.llm_api_key.startswith("...")
-    ):
-        os.environ["LLM_API_KEY"] = req.llm_api_key
+    llm_key = _submitted_key(req.llm_api_key)
+    if llm_key is not None:
+        os.environ["LLM_API_KEY"] = llm_key
         get_settings.cache_clear()
     if req.llm_model is not None:
         updates["llm_model"] = req.llm_model
@@ -184,12 +207,9 @@ def update_configs_endpoint(req: ConfigUpdate) -> dict:
     # Embedding
     if req.embedding_base_url is not None:
         updates["embedding_base_url"] = req.embedding_base_url
-    if (
-        req.embedding_api_key is not None
-        and req.embedding_api_key != "..."
-        and not req.embedding_api_key.startswith("...")
-    ):
-        os.environ["EMBEDDING_API_KEY"] = req.embedding_api_key
+    embedding_key = _submitted_key(req.embedding_api_key)
+    if embedding_key is not None:
+        os.environ["EMBEDDING_API_KEY"] = embedding_key
         get_settings.cache_clear()
     if req.embedding_model is not None:
         updates["embedding_model"] = req.embedding_model
@@ -197,16 +217,19 @@ def update_configs_endpoint(req: ConfigUpdate) -> dict:
         updates["embedding_dimension"] = req.embedding_dimension
     if req.embedding_max_tokens is not None:
         updates["embedding_max_tokens"] = req.embedding_max_tokens
+    if req.embedding_tokenizer_path is not None:
+        tokenizer_path = req.embedding_tokenizer_path.strip()
+        valid, message = validate_tokenizer_path(tokenizer_path)
+        if not valid:
+            raise HTTPException(status_code=400, detail=message)
+        updates["embedding_tokenizer_path"] = tokenizer_path
 
     # Reranker
     if req.reranker_base_url is not None:
         updates["reranker_base_url"] = req.reranker_base_url
-    if (
-        req.reranker_api_key is not None
-        and req.reranker_api_key != "..."
-        and not req.reranker_api_key.startswith("...")
-    ):
-        os.environ["RERANKER_API_KEY"] = req.reranker_api_key
+    reranker_key = _submitted_key(req.reranker_api_key)
+    if reranker_key is not None:
+        os.environ["RERANKER_API_KEY"] = reranker_key
         get_settings.cache_clear()
     if req.reranker_model is not None:
         updates["reranker_model"] = req.reranker_model
@@ -233,6 +256,9 @@ def update_configs_endpoint(req: ConfigUpdate) -> dict:
     # Agent
     if req.agent_max_iterations is not None:
         updates["agent_max_iterations"] = req.agent_max_iterations
+    # Network
+    if req.verify_ssl is not None:
+        updates["verify_ssl"] = "true" if req.verify_ssl else "false"
     if req.mcp_servers is not None:
         current_servers = json.loads(get_config("mcp_servers") or "[]")
         current_by_id = {server["id"]: server for server in current_servers}
@@ -249,10 +275,15 @@ def update_configs_endpoint(req: ConfigUpdate) -> dict:
 
     update_configs(updates)
     get_settings.cache_clear()
-    # Milvus/Embedding 配置变化会使已缓存的直连检索索引失效，需清空重建
-    if any(key.startswith(("milvus_", "embedding_")) for key in updates):
+    # Milvus/Embedding 配置变化会使已缓存的直连检索索引失效，需清空重建；
+    # verify_ssl 变化影响所有模型客户端，同样需要重建
+    if any(
+        key.startswith(("milvus_", "embedding_")) or key == "verify_ssl"
+        for key in updates
+    ):
         clear_retrieval_index_cache()
         clear_embedding_endpoint_cache()
+        clear_tokenizer_cache()
 
     return {"status": "ok", "message": "配置已保存"}
 
@@ -323,7 +354,7 @@ async def _test_llm() -> dict:
     settings = get_settings()
     client = None
     try:
-        client = httpx.AsyncClient(timeout=30.0)
+        client = httpx.AsyncClient(timeout=30.0, verify=settings.verify_ssl)
         resp = await client.post(
             f"{settings.llm_base_url}/chat/completions",
             headers={
@@ -339,9 +370,14 @@ async def _test_llm() -> dict:
         resp.raise_for_status()
         return {"status": "ok", "message": "LLM 连接正常"}
     except httpx.ConnectError:
+        if not settings.verify_ssl:
+            return {
+                "status": "error",
+                "message": "无法连接到 LLM 服务，请检查网络或 Base URL",
+            }
         return {
             "status": "error",
-            "message": "无法连接到 LLM 服务，请检查网络或 Base URL",
+            "message": "无法连接到 LLM 服务：请检查网络/Base URL；若为内网自签名证书（curl 需加 -k），请在模型配置中开启「跳过 SSL 验证」或通过 SSL_CERT_FILE 信任企业 CA 证书",
         }
     except httpx.TimeoutException:
         return {"status": "error", "message": "LLM 服务响应超时"}
@@ -371,6 +407,35 @@ async def _test_llm() -> dict:
             await client.aclose()
 
 
+async def _check_embedding_tokenizer(settings) -> str:
+    """探测服务端 /tokenize，并与当前分词器抽样比对，返回展示用说明。"""
+    remote = await aprobe_remote_tokenizer(
+        base_url=settings.embedding_base_url,
+        api_key=settings.embedding_api_key,
+        model=settings.embedding_model,
+        verify=settings.verify_ssl,
+    )
+    if remote is None:
+        return "；服务端未提供分词接口（/tokenize）"
+
+    local_count = get_token_counter()(TOKENIZER_PROBE_SAMPLE)
+    remote_count = remote.sample_tokens
+    diff = abs(remote_count - local_count) / max(remote_count, 1)
+    if not settings.embedding_tokenizer_path.strip():
+        return (
+            f"；服务端分词接口可用（样本 {remote_count} tokens），"
+            f"当前使用默认 cl100k 近似（{local_count} tokens，偏差 {diff:.0%}），"
+            "建议配置该模型的 tokenizer.json"
+        )
+    if diff <= 0.05:
+        return f"；服务端分词接口校验一致（样本 {remote_count} tokens）"
+    return (
+        f"；服务端分词接口可达，但本地分词器偏差 {diff:.0%}"
+        f"（服务端 {remote_count} / 本地 {local_count} tokens），"
+        "请确认分词器文件与模型匹配"
+    )
+
+
 async def _test_embedding() -> dict:
     """Test embedding connection, auto-detecting the API protocol.
 
@@ -385,6 +450,7 @@ async def _test_embedding() -> dict:
             api_key=settings.embedding_api_key,
             model=settings.embedding_model,
             dimension=settings.embedding_dimension,
+            verify=settings.verify_ssl,
             force=True,  # 测试连接时强制重新探测，绕过缓存
         )
     except EmbeddingProbeError as e:
@@ -401,9 +467,13 @@ async def _test_embedding() -> dict:
 
     label = PROTOCOL_LABELS.get(info.protocol, info.protocol)
     batch_note = "" if info.supports_batch else "，已自动切换为逐条嵌入"
+    tokenizer_note = await _check_embedding_tokenizer(settings)
     return {
         "status": "ok",
-        "message": f"Embedding 连接正常（{label}，{info.dimension} 维{batch_note}）",
+        "message": (
+            f"Embedding 连接正常（{label}，{info.dimension} 维{batch_note}）"
+            f"{tokenizer_note}"
+        ),
     }
 
 
@@ -439,7 +509,7 @@ async def _test_reranker() -> dict:
 
     client = None
     try:
-        client = httpx.AsyncClient(timeout=30.0)
+        client = httpx.AsyncClient(timeout=30.0, verify=settings.verify_ssl)
         for url, payload in attempts:
             resp = await client.post(
                 url,

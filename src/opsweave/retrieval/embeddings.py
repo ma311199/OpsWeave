@@ -30,6 +30,21 @@ PROTOCOL_LABELS = {
 # 探测时发送两条文本：根据返回向量条数校准服务的批量语义
 _PROBE_TEXTS = ["连接探测文本一", "连接探测文本二"]
 
+# 服务端分词接口校验用的样本（中英文混合，便于暴露分词器口径差异）
+TOKENIZER_PROBE_SAMPLE = (
+    "运维知识库：设备告警归因分析、处置建议与复盘记录。"
+    "O&M alert triage, incident review 2026-11-20."
+)
+
+
+@dataclass
+class RemoteTokenizerInfo:
+    """服务端分词接口的探测结果。"""
+
+    url: str  # 完整请求地址
+    style: str  # vllm | tei（请求体风格）
+    sample_tokens: int  # 服务端对探测样本返回的 token 数
+
 
 @dataclass
 class EmbeddingEndpointInfo:
@@ -160,6 +175,7 @@ def detect_embedding_endpoint(
     model: str,
     dimension: int,
     timeout: float = 30.0,
+    verify: bool = True,
     force: bool = False,
 ) -> EmbeddingEndpointInfo:
     """同步探测可用的 embedding 端点协议，结果进程内缓存。"""
@@ -171,22 +187,35 @@ def detect_embedding_endpoint(
             return cached
 
     actual_dimensions: dict[str, int] = {}
-    with httpx.Client(timeout=timeout) as client:
+    transport_errors: list[str] = []
+    with httpx.Client(timeout=timeout, verify=verify) as client:
         for protocol, suffix, payload in _probe_candidates(model, dimension):
             url = f"{root}{suffix}"
-            resp = client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
+            resp = None
+            for attempt in range(2):
+                try:
+                    resp = client.post(
+                        url,
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    break
+                except httpx.TransportError as exc:
+                    if attempt == 1:
+                        transport_errors.append(f"{suffix} → {type(exc).__name__}")
+            if resp is None:
+                continue
             info = _evaluate_response(resp, protocol, url, dimension, actual_dimensions)
             if info:
                 _cache_put(key, info)
                 return info
-    raise EmbeddingProbeError(_probe_error_message(actual_dimensions, dimension))
+    message = _probe_error_message(actual_dimensions, dimension)
+    if transport_errors:
+        message += f"（请求异常：{'；'.join(transport_errors)}）"
+    raise EmbeddingProbeError(message)
 
 
 async def adetect_embedding_endpoint(
@@ -195,6 +224,7 @@ async def adetect_embedding_endpoint(
     model: str,
     dimension: int,
     timeout: float = 30.0,
+    verify: bool = True,
     force: bool = False,
 ) -> EmbeddingEndpointInfo:
     """异步探测可用的 embedding 端点协议，结果进程内缓存。"""
@@ -206,22 +236,95 @@ async def adetect_embedding_endpoint(
             return cached
 
     actual_dimensions: dict[str, int] = {}
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    transport_errors: list[str] = []
+    async with httpx.AsyncClient(timeout=timeout, verify=verify) as client:
         for protocol, suffix, payload in _probe_candidates(model, dimension):
             url = f"{root}{suffix}"
-            resp = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
+            resp = None
+            for attempt in range(2):
+                try:
+                    resp = await client.post(
+                        url,
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    break
+                except httpx.TransportError as exc:
+                    if attempt == 1:
+                        transport_errors.append(f"{suffix} → {type(exc).__name__}")
+            if resp is None:
+                continue
             info = _evaluate_response(resp, protocol, url, dimension, actual_dimensions)
             if info:
                 _cache_put(key, info)
                 return info
-    raise EmbeddingProbeError(_probe_error_message(actual_dimensions, dimension))
+    message = _probe_error_message(actual_dimensions, dimension)
+    if transport_errors:
+        message += f"（请求异常：{'；'.join(transport_errors)}）"
+    raise EmbeddingProbeError(message)
+
+
+def _parse_token_count(data: object) -> int | None:
+    """从 /tokenize 的多种响应格式中解析 token 数。"""
+    if isinstance(data, dict):
+        count = data.get("count")  # vLLM: {"count": n, "max_model_len": n}
+        if isinstance(count, int):
+            return count
+        for key in ("tokens", "input_ids", "ids"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return len(value)
+        return None
+    if isinstance(data, list):  # TEI: [{id, text, special}, ...]
+        return len(data)
+    return None
+
+
+async def aprobe_remote_tokenizer(
+    base_url: str,
+    api_key: str,
+    model: str,
+    verify: bool = True,
+    timeout: float = 10.0,
+    sample: str = TOKENIZER_PROBE_SAMPLE,
+) -> RemoteTokenizerInfo | None:
+    """探测服务端是否提供分词接口（vLLM / TEI 的 POST /tokenize）。
+
+    依次尝试 vLLM（{"model", "prompt"}）与 TEI（{"inputs"}）两种请求体。
+    服务端不提供或探测失败时返回 None，不影响 Embedding 连接结果。
+    """
+    url = f"{base_url.rstrip('/')}/tokenize"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    attempts = [
+        ("vllm", {"model": model, "prompt": sample}),
+        ("tei", {"inputs": sample}),
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=timeout, verify=verify) as client:
+            for style, payload in attempts:
+                try:
+                    resp = await client.post(url, headers=headers, json=payload)
+                except httpx.TransportError:
+                    return None
+                if resp.status_code != 200:
+                    continue
+                try:
+                    count = _parse_token_count(resp.json())
+                except ValueError:
+                    continue
+                if count is not None:
+                    return RemoteTokenizerInfo(
+                        url=url, style=style, sample_tokens=count
+                    )
+    except Exception:  # noqa: BLE001
+        return None
+    return None
 
 
 class OpenAICompatEmbedding(BaseEmbedding):
@@ -245,6 +348,9 @@ class OpenAICompatEmbedding(BaseEmbedding):
     supports_batch: bool = Field(
         default=True, description="Whether the service accepts batch inputs"
     )
+    verify_ssl: bool = Field(
+        default=True, description="Verify TLS certificates for the embedding API"
+    )
 
     @classmethod
     def from_settings(cls) -> OpenAICompatEmbedding:
@@ -255,6 +361,7 @@ class OpenAICompatEmbedding(BaseEmbedding):
             api_key=s.embedding_api_key,
             model=s.embedding_model,
             dimension=s.embedding_dimension,
+            verify=s.verify_ssl,
         )
         return cls(
             base_url=s.embedding_base_url.rstrip("/"),
@@ -264,13 +371,14 @@ class OpenAICompatEmbedding(BaseEmbedding):
             endpoint_url=info.url,
             protocol=info.protocol,
             supports_batch=info.supports_batch,
+            verify_ssl=s.verify_ssl,
         )
 
     def count_tokens(self, text: str) -> int:
-        """使用 LlamaIndex 当前 tokenizer 估算文本 token 数，供入库前做长度校验。"""
-        from llama_index.core.utils import get_tokenizer
+        """按配置的分词器统计 token 数（未配置时回退 cl100k_base）。"""
+        from .tokenization import get_token_counter
 
-        return len(get_tokenizer()(text))
+        return get_token_counter()(text)
 
     def _get_query_embedding(self, query: str) -> list[float]:
         return self._embed_batch([query])[0]
@@ -328,6 +436,7 @@ class OpenAICompatEmbedding(BaseEmbedding):
             },
             json=self._request_payload(texts),
             timeout=self.timeout,
+            verify=self.verify_ssl,
         )
         response.raise_for_status()
         embeddings = _parse_embeddings(response.json())
@@ -335,7 +444,9 @@ class OpenAICompatEmbedding(BaseEmbedding):
         return embeddings
 
     async def _aembed_request(self, texts: list[str]) -> list[list[float]]:
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(
+            timeout=self.timeout, verify=self.verify_ssl
+        ) as client:
             response = await client.post(
                 self._request_url(),
                 headers={

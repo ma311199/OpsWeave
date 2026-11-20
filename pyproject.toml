@@ -15,6 +15,8 @@ dependencies = [
     "llama-index-llms-langchain>=0.4.0",
     "llama-index-embeddings-langchain>=0.3.0",
     "llama-index-vector-stores-milvus>=0.9.3",
+    # 本地分词器（tokenizer.json），用于与 Embedding 模型保持一致的 token 计数
+    "tokenizers>=0.15",
     # Backend API
     "fastapi>=0.116.0",
     "uvicorn[standard]>=0.34.0",
