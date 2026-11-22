@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field, model_validator
@@ -42,6 +45,22 @@ class ApplicationRequest(BaseModel):
         return self
 
 
+def _milvus_environment_id() -> str:
+    settings = get_settings()
+    milvus_uri = getattr(settings, "milvus_uri", "http://localhost:19530")
+    milvus_database = getattr(settings, "milvus_database", "default")
+    milvus_user = getattr(settings, "milvus_user", "")
+    uri = urlsplit(milvus_uri)
+    identity = "|".join(
+        (
+            f"{uri.scheme.lower()}://{(uri.hostname or '').lower()}:{uri.port or 19530}",
+            milvus_database,
+            milvus_user,
+        )
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+
+
 def _init_knowledge() -> None:
     """创建知识库元数据表，并为既有 SQLite 数据库补齐新字段。"""
     with _get_conn() as conn:
@@ -51,6 +70,7 @@ def _init_knowledge() -> None:
             reviewer TEXT, error TEXT, collection_name TEXT NOT NULL DEFAULT 'opsweave',
             chunk_size INTEGER NOT NULL DEFAULT 512, chunk_overlap INTEGER NOT NULL DEFAULT 64,
             semantic_max_chunk_size INTEGER NOT NULL DEFAULT 2048, structure_format TEXT NOT NULL DEFAULT 'markdown', semantic_threshold INTEGER NOT NULL DEFAULT 95, chunk_metadata TEXT NOT NULL DEFAULT '{}',
+            milvus_environment_id TEXT NOT NULL DEFAULT '', index_status TEXT NOT NULL DEFAULT 'unknown',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""")
         columns = {
@@ -60,6 +80,14 @@ def _init_knowledge() -> None:
         if "collection_name" not in columns:
             conn.execute(
                 "ALTER TABLE knowledge_documents ADD COLUMN collection_name TEXT NOT NULL DEFAULT 'opsweave'"
+            )
+        if "milvus_environment_id" not in columns:
+            conn.execute(
+                "ALTER TABLE knowledge_documents ADD COLUMN milvus_environment_id TEXT NOT NULL DEFAULT ''"
+            )
+        if "index_status" not in columns:
+            conn.execute(
+                "ALTER TABLE knowledge_documents ADD COLUMN index_status TEXT NOT NULL DEFAULT 'unknown'"
             )
         if "chunk_size" not in columns:
             conn.execute(
@@ -85,6 +113,11 @@ def _init_knowledge() -> None:
             conn.execute(
                 "ALTER TABLE knowledge_documents ADD COLUMN chunk_metadata TEXT NOT NULL DEFAULT '{}'"
             )
+        environment_id = _milvus_environment_id()
+        conn.execute(
+            "UPDATE knowledge_documents SET milvus_environment_id = ? WHERE milvus_environment_id = ''",
+            (environment_id,),
+        )
         conn.execute("""CREATE TABLE IF NOT EXISTS knowledge_chunks (
             id TEXT PRIMARY KEY, document_id TEXT NOT NULL, owner TEXT NOT NULL,
             ordinal INTEGER NOT NULL, text TEXT NOT NULL, embedding_text TEXT NOT NULL,
@@ -110,6 +143,45 @@ def _document_row(document_id: str, owner: str, role: Role):
     return row
 
 
+@router.post("/sync")
+def sync_knowledge(principal: tuple[str, Role] = Depends(current_user)) -> dict:
+    _, role = principal
+    if role is not Role.ADMIN:
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    from pymilvus import utility
+
+    from .config import _connect_milvus
+
+    _connect_milvus()
+    names = set(utility.list_collections())
+    environment_id = _milvus_environment_id()
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, collection_name, status FROM knowledge_documents WHERE milvus_environment_id = ?",
+            (environment_id,),
+        ).fetchall()
+        missing = [row["id"] for row in rows if row["collection_name"] not in names]
+        restored = [
+            row["id"]
+            for row in rows
+            if row["collection_name"] in names and row["status"] != "completed"
+        ]
+        conn.executemany(
+            "UPDATE knowledge_documents SET index_status = 'missing' WHERE id = ?",
+            [(document_id,) for document_id in missing],
+        )
+        conn.executemany(
+            "UPDATE knowledge_documents SET index_status = 'available' WHERE id = ?",
+            [(document_id,) for document_id in restored],
+        )
+    return {
+        "environment_id": environment_id,
+        "collections": sorted(names),
+        "missing_documents": len(missing),
+        "preserved_locally": True,
+    }
+
+
 @router.get("/collections")
 def list_knowledge_collections(_: tuple[str, Role] = Depends(current_user)) -> dict:
     from pymilvus import Collection, utility
@@ -119,7 +191,11 @@ def list_knowledge_collections(_: tuple[str, Role] = Depends(current_user)) -> d
     _connect_milvus()
     descriptions = json.loads(get_config("milvus_collection_descriptions") or "{}")
     names = utility.list_collections()
+    settings = get_settings()
     return {
+        "environment_id": _milvus_environment_id(),
+        "milvus_uri": getattr(settings, "milvus_uri", "http://localhost:19530"),
+        "milvus_database": getattr(settings, "milvus_database", "default"),
         "collections": [
             {
                 "name": name,
@@ -127,7 +203,7 @@ def list_knowledge_collections(_: tuple[str, Role] = Depends(current_user)) -> d
                 "row_count": Collection(name).num_entities,
             }
             for name in names
-        ]
+        ],
     }
 
 
@@ -175,8 +251,16 @@ async def upload_document(
     _init_knowledge()
     with _get_conn() as conn:
         conn.execute(
-            "INSERT INTO knowledge_documents (id, owner, filename, path, size, strategy, status, collection_name) VALUES (?, ?, ?, ?, ?, 'token', 'uploaded', ?)",
-            (document_id, owner, filename, str(target), len(content), collection_name),
+            "INSERT INTO knowledge_documents (id, owner, filename, path, size, strategy, status, collection_name, milvus_environment_id, index_status) VALUES (?, ?, ?, ?, ?, 'token', 'uploaded', ?, ?, 'missing')",
+            (
+                document_id,
+                owner,
+                filename,
+                str(target),
+                len(content),
+                collection_name,
+                _milvus_environment_id(),
+            ),
         )
     return {
         "id": document_id,
@@ -194,12 +278,13 @@ def list_documents(principal: tuple[str, Role] = Depends(current_user)) -> dict:
     with _get_conn() as conn:
         if role is Role.ADMIN:
             rows = conn.execute(
-                "SELECT id, owner, filename, size, strategy, status, reviewer, error, collection_name, chunk_size, chunk_overlap, semantic_max_chunk_size, structure_format, semantic_threshold, created_at FROM knowledge_documents ORDER BY created_at DESC"
+                "SELECT id, owner, filename, size, strategy, status, reviewer, error, collection_name, chunk_size, chunk_overlap, semantic_max_chunk_size, structure_format, semantic_threshold, index_status, created_at FROM knowledge_documents WHERE milvus_environment_id = ? ORDER BY created_at DESC",
+                (_milvus_environment_id(),),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, owner, filename, size, strategy, status, reviewer, error, collection_name, chunk_size, chunk_overlap, semantic_max_chunk_size, created_at FROM knowledge_documents WHERE owner = ? ORDER BY created_at DESC",
-                (owner,),
+                "SELECT id, owner, filename, size, strategy, status, reviewer, error, collection_name, chunk_size, chunk_overlap, semantic_max_chunk_size, structure_format, semantic_threshold, index_status, created_at FROM knowledge_documents WHERE owner = ? AND milvus_environment_id = ? ORDER BY created_at DESC",
+                (owner, _milvus_environment_id()),
             ).fetchall()
     return {"documents": [dict(row) for row in rows], "count": len(rows)}
 
@@ -269,6 +354,11 @@ def apply_index(
     return {"status": "pending", "document_id": document_id}
 
 
+def _split_sentences(text: str) -> list[str]:
+    """Avoid LlamaIndex's default NLTK Punkt tokenizer, which may be unavailable or blocked."""
+    return [part for part in re.split(r"(?<=[.!?。！？])\s*", text) if part]
+
+
 def _process_document(document_id: str) -> None:
     """按所选策略切分文档，校验最终向量文本长度后写入 Milvus 和 SQLite。"""
     from llama_index.core import SimpleDirectoryReader
@@ -304,6 +394,7 @@ def _process_document(document_id: str) -> None:
             chunk_size=doc["chunk_size"],
             chunk_overlap=doc["chunk_overlap"],
             tokenizer=tokenizer,
+            chunking_tokenizer_fn=_split_sentences,
         )
         source_nodes = splitter.get_nodes_from_documents(loaded)
     elif strategy in {
@@ -347,6 +438,7 @@ def _process_document(document_id: str) -> None:
             chunk_size=doc["semantic_max_chunk_size"],
             chunk_overlap=0,
             tokenizer=tokenizer,
+            chunking_tokenizer_fn=_split_sentences,
         )
         bounded_nodes = bounded_splitter.get_nodes_from_documents(loaded)
         semantic_parser = SemanticSplitterNodeParser(
@@ -366,6 +458,7 @@ def _process_document(document_id: str) -> None:
             chunk_size=doc["chunk_size"],
             chunk_overlap=doc["chunk_overlap"],
             tokenizer=tokenizer,
+            chunking_tokenizer_fn=_split_sentences,
         )
         source_nodes = base_splitter.get_nodes_from_documents(loaded)
         for source_node in source_nodes:
@@ -471,7 +564,8 @@ def _process_document(document_id: str) -> None:
                 }
                 for node in vector_nodes
             ]
-            # 幂等重建：先删除该文档的旧向量，避免失败重试产生重复数据
+            # delete 需要集合已加载；先加载再清理旧向量以支持幂等重建。
+            client.load_collection(doc["collection_name"])
             client.delete(
                 doc["collection_name"],
                 filter=f'document_id == "{document_id}"',
@@ -485,8 +579,6 @@ def _process_document(document_id: str) -> None:
                 len(returned_ids),
             )
             client.flush(doc["collection_name"])
-            # 新建集合默认未加载，query/get 前必须先 load，否则报 collection not loaded
-            client.load_collection(doc["collection_name"])
             inserted_ids = [node.node_id for node in vector_nodes]
             inserted_rows = client.get(
                 doc["collection_name"], ids=inserted_ids, output_fields=["id"]
@@ -520,7 +612,7 @@ def _process_document(document_id: str) -> None:
             chunks,
         )
         conn.execute(
-            "UPDATE knowledge_documents SET status = 'completed', error = NULL WHERE id = ?",
+            "UPDATE knowledge_documents SET status = 'completed', index_status = 'available', error = NULL WHERE id = ?",
             (document_id,),
         )  # 更新文档状态为已完成
 
