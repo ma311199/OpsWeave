@@ -24,6 +24,7 @@ from ...retrieval.embeddings import (
 from ...retrieval.tokenization import (
     clear_tokenizer_cache,
     get_token_counter,
+    tokenizer_status,
     validate_tokenizer_path,
 )
 from ..auth import require_admin
@@ -148,6 +149,7 @@ def get_configs() -> dict:
     result["embedding"]["tokenizer_path"] = db_configs.get(
         "embedding_tokenizer_path", settings.embedding_tokenizer_path
     )
+    result["embedding"]["tokenizer_status"] = tokenizer_status()
 
     # Reranker
     result["reranker"]["base_url"] = db_configs.get(
@@ -416,7 +418,13 @@ async def _check_embedding_tokenizer(settings) -> str:
         verify=settings.verify_ssl,
     )
     if remote is None:
-        return "；服务端未提供分词接口（/tokenize）"
+        status = tokenizer_status()
+        note = (
+            f"当前使用本地分词器 {status['file']}"
+            if status["active"]
+            else "当前使用默认 cl100k 近似"
+        )
+        return f"；服务端未提供分词接口（/tokenize），{note}"
 
     local_count = get_token_counter()(TOKENIZER_PROBE_SAMPLE)
     remote_count = remote.sample_tokens

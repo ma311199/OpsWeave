@@ -1,5 +1,16 @@
+from pathlib import Path
+
 from opsweave.api.routes import knowledge
 from opsweave.auth.permissions import Role
+
+
+def test_sentence_splitter_does_not_require_nltk_resources():
+    assert knowledge._split_sentences("第一句。第二句！ Third sentence. Fourth?") == [
+        "第一句。",
+        "第二句！",
+        "Third sentence.",
+        "Fourth?",
+    ]
 
 
 def test_collection_list_returns_mock_collection(
@@ -77,6 +88,51 @@ def test_apply_accepts_all_chunking_strategies_and_rejects_invalid_parameters(
         ).status_code
         == 422
     )
+
+
+def test_sync_marks_missing_collection_and_preserves_local_chunks(
+    client, milvus, mock_data, monkeypatch
+):
+    document = seed_mock_document(client, mock_data, status="completed")
+    knowledge._init_knowledge()
+    with knowledge._get_conn() as conn:
+        conn.execute(
+            "UPDATE knowledge_documents SET milvus_environment_id = ?, index_status = 'available' WHERE id = ?",
+            (knowledge._milvus_environment_id(), document["id"]),
+        )
+        conn.execute(
+            "INSERT INTO knowledge_chunks (id, document_id, owner, ordinal, text, embedding_text) VALUES ('chunk-1', ?, 'alice', 0, 'text', 'text')",
+            (document["id"],),
+        )
+    monkeypatch.setattr("opsweave.api.routes.config._connect_milvus", lambda: None)
+    import pymilvus
+
+    monkeypatch.setattr(pymilvus.utility, "list_collections", lambda: [])
+    client.app.dependency_overrides[knowledge.current_user] = lambda: (
+        "admin",
+        Role.ADMIN,
+    )
+    response = client.post("/api/knowledge/sync")
+    assert response.status_code == 200
+    assert response.json()["missing_documents"] == 1
+    rows = client.get("/api/knowledge/documents").json()["documents"]
+    assert rows[0]["index_status"] == "missing"
+    with knowledge._get_conn() as conn:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM knowledge_chunks WHERE document_id = ?",
+                (document["id"],),
+            ).fetchone()[0]
+            == 1
+        )
+    assert Path(
+        knowledge._document_dir("alice") / f"{document['id']}_{document['filename']}"
+    ).exists()
+
+
+def test_non_admin_cannot_sync_milvus(client):
+    response = client.post("/api/knowledge/sync")
+    assert response.status_code == 403
 
 
 def test_upload_rejects_unknown_collection(client, milvus, mock_data):

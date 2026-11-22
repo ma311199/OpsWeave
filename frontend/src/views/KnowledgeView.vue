@@ -10,7 +10,9 @@
         </el-upload>
         <el-select v-model="selectedCollection" placeholder="选择知识库" style="width:300px" :loading="collectionsLoading" :disabled="collections.length === 0"><el-option v-for="item in collections" :key="item.name" :label="item.name" :value="item.name"><div class="collection-option"><span>{{ item.name }}</span><small>{{ item.description || '无描述' }} · {{ item.row_count }} 条数据</small></div></el-option></el-select>
         <el-button size="small" :loading="collectionsLoading" @click="loadCollections">刷新知识库</el-button>
-        <span v-if="!collectionsLoading && collections.length === 0" class="hint">管理员配置的知识库为空，或当前配置的 Milvus 中没有对应知识库</span>
+        <el-button v-if="isAdmin" size="small" type="warning" :loading="syncing" @click="syncMilvus">同步 Milvus 状态</el-button>
+        <span v-if="milvusEnvironment" class="hint">当前 Milvus：{{ milvusUri }} / {{ milvusDatabase }}（环境 {{ milvusEnvironment }}）</span>
+        <span v-if="!collectionsLoading && collections.length === 0" class="hint">当前 Milvus 中没有知识库</span>
         <span class="hint">当前选择：{{ selectedCollection || '未选择' }}。块大小与重叠按 Token 计；Embedding 上限 {{ embeddingMaxTokens }} tokens。超过上限将报错，不会自动拆分。</span>
       </div>
       <div v-if="isAdmin" class="filters-row">
@@ -29,6 +31,7 @@
           <span v-else>—</span>
         </template></el-table-column>
         <el-table-column label="状态" width="120"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusName(row.status) }}</el-tag></template></el-table-column>
+        <el-table-column prop="index_status" label="索引状态" width="120"><template #default="{ row }"><el-tag v-if="row.index_status === 'missing'" type="danger">Milvus 已缺失</el-tag><el-tag v-else-if="row.index_status === 'available'" type="success">Milvus 正常</el-tag><span v-else>未校验</span></template></el-table-column>
         <el-table-column prop="error" label="错误信息" min-width="150" show-overflow-tooltip />
         <el-table-column label="操作" min-width="190" fixed="right"><template #default="{ row }">
           <el-button v-if="['uploaded','rejected','failed'].includes(row.status)" link type="primary" :loading="row.actionLoading" :disabled="row.actionLoading" @click="apply(row)">{{ row.actionLoading ? '正在提交' : isAdmin ? '开始构建' : '申请构建' }}</el-button>
@@ -101,6 +104,10 @@ const documents = ref([])
 const strategies = ref([])
 const collections = ref([])
 const collectionsLoading = ref(false)
+const syncing = ref(false)
+const milvusEnvironment = ref('')
+const milvusUri = ref('')
+const milvusDatabase = ref('')
 const selectedCollection = ref('')
 const isAdmin = ref(false)
 const uploading = ref(false)
@@ -144,12 +151,25 @@ async function loadCollections() {
   try {
     const { data } = await axios.get('/api/knowledge/collections')
     collections.value = data.collections
+    milvusEnvironment.value = data.environment_id
+    milvusUri.value = data.milvus_uri
+    milvusDatabase.value = data.milvus_database
     if (!collections.value.some(item => item.name === selectedCollection.value)) selectedCollection.value = collections.value[0]?.name || ''
   } catch (error) { ElMessage.error(error.response?.data?.detail || '加载知识库失败') }
   finally { collectionsLoading.value = false }
 }
 async function refresh() {
   documents.value = (await axios.get('/api/knowledge/documents')).data.documents.map(row => ({ ...row, selectedStrategy: row.strategy === 'token' || !row.strategy ? 'fixed' : row.strategy, selectedChunkSize: row.chunk_size || 512, selectedOverlap: row.chunk_overlap || 64, semanticMaxChunkSize: row.semantic_max_chunk_size || 2048, structureFormat: row.structure_format || 'markdown', semanticThreshold: row.semantic_threshold || 95 }))
+}
+async function syncMilvus() {
+  syncing.value = true
+  try {
+    const { data } = await axios.post('/api/knowledge/sync')
+    ElMessage.success(`同步完成：${data.missing_documents} 个文档对应的集合在当前 Milvus 中缺失；本地文件与文档块已保留`)
+    await loadCollections()
+    await refresh()
+  } catch (error) { ElMessage.error(error.response?.data?.detail || '同步失败') }
+  finally { syncing.value = false }
 }
 async function handleUpload(options) {
   uploading.value = true

@@ -15,10 +15,13 @@ def test_short_term_history_is_isolated_and_limited(client):
     append_turn("alice", "conversation-a", "你好", "你好！")
     append_turn("alice", "conversation-b", "另一个会话", "回复")
 
-    assert get_history("alice", "conversation-a") == [
-        {"role": "user", "content": "你好"},
-        {"role": "assistant", "content": "你好！"},
+    history = get_history("alice", "conversation-a")
+    assert [(m["role"], m["content"]) for m in history] == [
+        ("user", "你好"),
+        ("assistant", "你好！"),
     ]
+    # 历史消息带时间戳，供前端会话列表展示
+    assert all(m["created_at"] for m in history)
     assert get_history("bob", "conversation-a") == []
 
 

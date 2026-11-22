@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from pymilvus.exceptions import MilvusException
 
+from ...agents.retrieval_pipeline import (
+    DEFAULT_COLLECTION,
+    clear_retrieval_index_cache,
+    run_retrieval_pipeline,
+)
 from ...auth.permissions import PermissionChecker, ResourceType, Role
+from ...config.settings import get_settings
 from ...retrieval.retriever import Retriever
 from ..auth import current_user, require_admin
 
@@ -16,6 +23,9 @@ _checker = PermissionChecker.default_rules()
 class RetrieveRequest(BaseModel):
     query: str = Field(..., description="Natural language query")
     top_k: int = Field(default=5, ge=1, le=20, description="Number of results")
+    collection_name: str = Field(
+        default=DEFAULT_COLLECTION, description="Milvus collection to search"
+    )
 
 
 class RetrieveResponse(BaseModel):
@@ -31,25 +41,26 @@ def search(
     username, role = principal
     _checker.require(role, ResourceType.RETRIEVAL_INDEX)
 
-    retriever = Retriever()
     try:
-        results = retriever.retrieve(
-            query=req.query, top_k=req.top_k, role=role, user_id=username
+        state = run_retrieval_pipeline(
+            query=req.query,
+            role=role,
+            user_id=username,
+            top_k=req.top_k,
+            collection_name=req.collection_name,
         )
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except MilvusException as e:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "向量库连接失败，请确认 Milvus 已启动且地址可访问："
+                f"{get_settings().milvus_uri}"
+            ),
+        ) from e
 
-    return RetrieveResponse(
-        query=req.query,
-        results=[
-            {
-                "text": r.text,
-                "score": round(r.score, 4),
-                "source": r.source,
-            }
-            for r in results
-        ],
-    )
+    return RetrieveResponse(query=req.query, results=state.get("results", []))
 
 
 @router.post("/build")
@@ -67,6 +78,8 @@ def build_index(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Build failed: {e}")
+    # 重建后丢弃旧的缓存索引，避免直连检索继续用过期集合句柄。
+    clear_retrieval_index_cache(collection_name)
     return {
         "status": "built",
         "collection": collection_name,

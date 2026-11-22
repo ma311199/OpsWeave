@@ -118,3 +118,17 @@ def get_token_counter() -> Callable[[str], int]:
     """Return a token counting function for the current configuration."""
     tokenizer = get_tokenizer()
     return lambda text: len(tokenizer(text))
+
+
+def tokenizer_status() -> dict[str, Any]:
+    """Describe which tokenizer is actually in effect, for UI display."""
+    configured = get_settings().embedding_tokenizer_path.strip()
+    if configured:
+        tokenizer_file = _resolve_tokenizer_file(configured)
+        if tokenizer_file is not None and _load_tokenizer(configured) is not None:
+            return {
+                "active": True,
+                "source": "local",
+                "file": str(tokenizer_file),
+            }
+    return {"active": False, "source": "fallback", "file": "tiktoken cl100k_base"}
